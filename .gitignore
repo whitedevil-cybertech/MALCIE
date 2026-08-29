@@ -1,0 +1,29 @@
+# Environment and credentials
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node
+node_modules/
+build/
+dist/
+
+# Logs and databases
+*.log
+*.db
+*.sqlite
+uploads/
+artifacts/
+samples/
+
+# Editor/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
