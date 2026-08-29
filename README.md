@@ -29,7 +29,6 @@ Malware Analysis, Linkage, Correlation and Investigation Engine.
 - `/src/backend` - FastAPI backend service
 - `/src/frontend` - React + TypeScript frontend
 - `/tests/backend` - backend tests
-- `/tests/frontend` - frontend tests
 - `/alembic` - migration scaffolding
 - `/infra` - deployment infrastructure placeholders
 - `/scripts` - utility script placeholders
