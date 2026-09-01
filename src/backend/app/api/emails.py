@@ -13,12 +13,10 @@ from app.schemas import (
     GraphTokenResponse,
 )
 from app.services.email_intake import (
-    evidence_root,
     hash_bytes,
     parse_eml_bytes,
-    sanitize_filename,
+    store_evidence_blob,
     validate_eml_upload,
-    write_evidence_file,
 )
 from app.services.graph_client import GraphClient, get_graph_client
 
@@ -44,11 +42,12 @@ def _persist_email_evidence(
     graph_message_id: str | None = None,
 ) -> EmailEvidence:
     parsed = parse_eml_bytes(eml_content)
-    root = evidence_root() / f"incident_{incident_id}"
-    safe_eml_name = sanitize_filename(original_name, "email.eml")
     raw_email_hash = hash_bytes(eml_content)
-    raw_email_path = root / "emails" / f"{raw_email_hash}_{safe_eml_name}"
-    write_evidence_file(raw_email_path, eml_content)
+    raw_email_path = store_evidence_blob(
+        subdirectory="emails",
+        filename=f"{raw_email_hash}.eml",
+        content=eml_content,
+    )
 
     email_record = EmailEvidence(
         incident_id=incident_id,
@@ -70,10 +69,11 @@ def _persist_email_evidence(
     db.flush()
 
     for index, attachment in enumerate(parsed.attachments, start=1):
-        attachment_path = (
-            root / "attachments" / str(email_record.id) / f"{index}_{attachment.filename}"
+        attachment_path = store_evidence_blob(
+            subdirectory=f"attachments_{email_record.id}",
+            filename=f"{index}_{attachment.sha256}.bin",
+            content=attachment.payload,
         )
-        write_evidence_file(attachment_path, attachment.payload)
         db.add(
             Artifact(
                 incident_id=incident_id,

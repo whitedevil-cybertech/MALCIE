@@ -144,6 +144,13 @@ def evidence_root() -> Path:
     return root
 
 
-def write_evidence_file(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(content)
+def store_evidence_blob(*, subdirectory: str, filename: str, content: bytes) -> Path:
+    root = evidence_root().resolve()
+    safe_subdirectory = SAFE_FILENAME_PATTERN.sub("_", subdirectory)
+    safe_filename = SAFE_FILENAME_PATTERN.sub("_", filename)
+    target = (root / safe_subdirectory / safe_filename).resolve()
+    if root != target and root not in target.parents:
+        raise HTTPException(status_code=400, detail="Invalid evidence storage path")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
+    return target
