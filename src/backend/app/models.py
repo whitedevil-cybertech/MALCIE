@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -70,3 +70,38 @@ class Artifact(Base):
 
     incident: Mapped[Incident] = relationship(back_populates="artifacts")
     email: Mapped[EmailEvidence] = relationship(back_populates="artifacts")
+    analysis: Mapped[ArtifactAnalysis | None] = relationship(
+        back_populates="artifact",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class ArtifactAnalysis(Base):
+    __tablename__ = "artifact_analyses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    artifact_id: Mapped[int] = mapped_column(
+        ForeignKey("artifacts.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id", ondelete="CASCADE"))
+    status: Mapped[str] = mapped_column(String(50), nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_pe: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    file_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pe_headers: Mapped[dict[str, str | int | None]] = mapped_column(JSON, default=dict)
+    sections: Mapped[list[dict[str, str | int | float]]] = mapped_column(JSON, default=list)
+    imports: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
+    extracted_strings: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    artifact: Mapped[Artifact] = relationship(back_populates="analysis")
+    incident: Mapped[Incident] = relationship()

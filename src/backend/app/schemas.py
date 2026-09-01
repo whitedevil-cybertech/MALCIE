@@ -50,6 +50,24 @@ class ArtifactRead(BaseModel):
     sha256: str
 
 
+class ArtifactAnalysisRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    artifact_id: int
+    incident_id: int
+    status: str
+    error_message: str | None
+    is_pe: bool
+    file_type: str | None
+    pe_headers: dict[str, str | int | None]
+    sections: list[dict[str, str | int | float]]
+    imports: list[dict[str, object]]
+    extracted_strings: list[str]
+    created_at: datetime
+    updated_at: datetime
+
+
 class EmailEvidenceRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
