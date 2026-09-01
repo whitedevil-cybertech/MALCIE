@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class Incident(Base):
@@ -15,7 +19,7 @@ class Incident(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="new", nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     emails: Mapped[list[EmailEvidence]] = relationship(
         back_populates="incident", cascade="all, delete-orphan"
@@ -43,7 +47,7 @@ class EmailEvidence(Base):
     body_preview: Mapped[str] = mapped_column(Text, default="")
     raw_email_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     raw_email_path: Mapped[str] = mapped_column(String(1024), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     incident: Mapped[Incident] = relationship(back_populates="emails")
     artifacts: Mapped[list[Artifact]] = relationship(
@@ -62,7 +66,7 @@ class Artifact(Base):
     size: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     incident: Mapped[Incident] = relationship(back_populates="artifacts")
     email: Mapped[EmailEvidence] = relationship(back_populates="artifacts")

@@ -42,9 +42,15 @@ class ParsedEmailEvidence:
 
 def validate_eml_upload(upload: UploadFile, content: bytes) -> None:
     if not upload.filename or not upload.filename.lower().endswith(".eml"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only .eml files are accepted")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only .eml files are accepted",
+        )
     if not content:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded .eml is empty")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded .eml is empty",
+        )
     if len(content) > settings.max_eml_size_bytes:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,

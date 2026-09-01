@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     app_name: str = "MALCIE"
     app_env: str = "development"
     api_v1_prefix: str = "/api/v1"
-    database_url: str = "******db:5432/malciedb"
+    database_url: str = "sqlite:///./malcie.db"
 
     graph_client_id: str = ""
     graph_tenant_id: str = "common"

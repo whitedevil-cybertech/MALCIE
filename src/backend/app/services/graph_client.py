@@ -63,7 +63,7 @@ class GraphClient:
         endpoint = f"https://graph.microsoft.com/v1.0/me/messages/{message_id}/$value"
         response = self._client.get(
             endpoint,
-            headers={"Authorization": f"******"},
+            headers={"Authorization": "Bearer " + access_token},
         )
         if response.status_code >= 400:
             raise HTTPException(

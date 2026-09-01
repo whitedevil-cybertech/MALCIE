@@ -6,10 +6,11 @@ from app.models import Incident
 from app.schemas import IncidentCreate, IncidentRead
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
+DB_SESSION = Depends(get_db)
 
 
 @router.post("", response_model=IncidentRead)
-def create_incident(payload: IncidentCreate, db: Session = Depends(get_db)) -> Incident:
+def create_incident(payload: IncidentCreate, db: Session = DB_SESSION) -> Incident:
     incident = Incident(title=payload.title, description=payload.description)
     db.add(incident)
     db.commit()
@@ -18,7 +19,7 @@ def create_incident(payload: IncidentCreate, db: Session = Depends(get_db)) -> I
 
 
 @router.get("/{incident_id}", response_model=IncidentRead)
-def get_incident(incident_id: int, db: Session = Depends(get_db)) -> Incident:
+def get_incident(incident_id: int, db: Session = DB_SESSION) -> Incident:
     incident = db.get(Incident, incident_id)
     if incident is None:
         raise HTTPException(status_code=404, detail="Incident not found")

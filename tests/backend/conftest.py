@@ -11,16 +11,21 @@ BACKEND_SRC = Path(__file__).resolve().parents[2] / "src" / "backend"
 if str(BACKEND_SRC) not in sys.path:
     sys.path.insert(0, str(BACKEND_SRC))
 
-from app.core.config import settings
-from app.db import Base, get_db
-from app.main import app
+from app.core.config import settings  # noqa: E402
+from app.db import Base, get_db  # noqa: E402
+from app.main import app  # noqa: E402
 
 
 @pytest.fixture
 def client(tmp_path: Path) -> Generator[TestClient, None, None]:
     test_db_path = tmp_path / "test.db"
     engine = create_engine(f"sqlite:///{test_db_path}", future=True)
-    testing_session_local = sessionmaker(bind=engine, autocommit=False, autoflush=False, class_=Session)
+    testing_session_local = sessionmaker(
+        bind=engine,
+        autocommit=False,
+        autoflush=False,
+        class_=Session,
+    )
     Base.metadata.create_all(bind=engine)
 
     def override_get_db() -> Generator[Session, None, None]:

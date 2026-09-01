@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
@@ -25,6 +23,8 @@ from app.services.email_intake import (
 from app.services.graph_client import GraphClient, get_graph_client
 
 router = APIRouter(prefix="/emails", tags=["emails"])
+DB_SESSION = Depends(get_db)
+GRAPH_SERVICE = Depends(get_graph_client)
 
 
 def _get_incident_or_404(db: Session, incident_id: int) -> Incident:
@@ -94,7 +94,7 @@ def _persist_email_evidence(
 @router.get("/graph/auth-url", response_model=GraphAuthUrlResponse)
 def graph_auth_url(
     redirect_uri: str,
-    graph_client: GraphClient = Depends(get_graph_client),
+    graph_client: GraphClient = GRAPH_SERVICE,
 ) -> GraphAuthUrlResponse:
     if not redirect_uri:
         raise HTTPException(status_code=400, detail="redirect_uri is required")
@@ -105,7 +105,7 @@ def graph_auth_url(
 @router.post("/graph/oauth/token", response_model=GraphTokenResponse)
 def graph_exchange_token(
     payload: GraphTokenExchangeRequest,
-    graph_client: GraphClient = Depends(get_graph_client),
+    graph_client: GraphClient = GRAPH_SERVICE,
 ) -> GraphTokenResponse:
     token_payload = graph_client.exchange_code_for_token(
         code=payload.code,
@@ -116,9 +116,9 @@ def graph_exchange_token(
 
 @router.post("/upload-eml", response_model=EmailEvidenceRead, status_code=status.HTTP_201_CREATED)
 def upload_eml(
-    incident_id: int = Form(...),
-    eml_file: UploadFile = File(...),
-    db: Session = Depends(get_db),
+    incident_id: int = Form(...),  # noqa: B008
+    eml_file: UploadFile = File(...),  # noqa: B008
+    db: Session = DB_SESSION,
 ) -> EmailEvidence:
     _get_incident_or_404(db, incident_id)
     eml_content = eml_file.file.read()
@@ -140,8 +140,8 @@ def upload_eml(
 def ingest_graph_message(
     message_id: str,
     payload: GraphEmailIngestRequest,
-    db: Session = Depends(get_db),
-    graph_client: GraphClient = Depends(get_graph_client),
+    db: Session = DB_SESSION,
+    graph_client: GraphClient = GRAPH_SERVICE,
 ) -> EmailEvidence:
     _get_incident_or_404(db, payload.incident_id)
     graph_message = graph_client.get_message_eml(
@@ -161,7 +161,7 @@ def ingest_graph_message(
 
 
 @router.get("/{email_id}", response_model=EmailEvidenceRead)
-def get_email(email_id: int, db: Session = Depends(get_db)) -> EmailEvidence:
+def get_email(email_id: int, db: Session = DB_SESSION) -> EmailEvidence:
     email_record = db.get(EmailEvidence, email_id)
     if email_record is None:
         raise HTTPException(status_code=404, detail="Email evidence not found")
