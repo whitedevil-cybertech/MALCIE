@@ -5,8 +5,8 @@ Revises: 0001_phase1_baseline
 Create Date: 2026-09-01
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "0002_phase2a_email_intake"

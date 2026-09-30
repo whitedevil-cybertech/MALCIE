@@ -1,15 +1,17 @@
-from __future__ import annotations
-
+import hashlib
 import logging
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import pefile
 
-from app.models import Artifact, ArtifactAnalysis
+from app.models import Artifact, ArtifactAnalysis, IOCRecord
 from app.services.email_intake import evidence_root
+from app.services.ioc_extraction import extract_artifact_iocs
+from app.services.yara_scanner import scan_content_with_yara
 
 logger = logging.getLogger(__name__)
 PRINTABLE_STRING_PATTERN = re.compile(rb"[\x20-\x7e]{4,}")
@@ -26,6 +28,11 @@ class PEAnalysisData:
     sections: list[dict[str, str | int | float]]
     imports: list[dict[str, object]]
     extracted_strings: list[str]
+    md5: str | None = None
+    sha1: str | None = None
+    yara_matches: list[dict[str, Any]] = field(default_factory=list)
+    iocs: list[dict[str, Any]] = field(default_factory=list)
+
 
 
 def _section_entropy(raw_data: bytes) -> float:
@@ -45,7 +52,10 @@ def _section_entropy(raw_data: bytes) -> float:
 
 
 def _extract_strings(content: bytes) -> list[str]:
-    decoded = [match.decode("utf-8", errors="ignore") for match in PRINTABLE_STRING_PATTERN.findall(content)]
+    decoded = [
+        match.decode("utf-8", errors="ignore")
+        for match in PRINTABLE_STRING_PATTERN.findall(content)
+    ]
     unique: list[str] = []
     seen: set[str] = set()
     for item in decoded:
@@ -189,7 +199,11 @@ def analyze_artifact(artifact: Artifact) -> PEAnalysisData:
             extracted_strings=[],
         )
     except ValueError as exc:
-        logger.warning("Artifact storage validation error: artifact_id=%s error=%s", artifact.id, exc)
+        logger.warning(
+            "Artifact storage validation error: artifact_id=%s error=%s",
+            artifact.id,
+            exc,
+        )
         return PEAnalysisData(
             status="failed",
             error_message=str(exc),
@@ -213,7 +227,20 @@ def analyze_artifact(artifact: Artifact) -> PEAnalysisData:
             extracted_strings=[],
         )
 
-    return _parse_pe(content)
+    analysis = _parse_pe(content)
+    if content:
+        analysis.md5 = hashlib.md5(content).hexdigest()
+        analysis.sha1 = hashlib.sha1(content).hexdigest()
+        analysis.yara_matches = scan_content_with_yara(content)
+        extracted = extract_artifact_iocs(
+            content=content,
+            extracted_strings=analysis.extracted_strings,
+            imports=analysis.imports,
+            yara_matches=analysis.yara_matches,
+        )
+        analysis.iocs = [item.to_dict() for item in extracted]
+
+    return analysis
 
 
 def persist_artifact_analysis(
@@ -233,6 +260,9 @@ def persist_artifact_analysis(
             sections=analysis.sections,
             imports=analysis.imports,
             extracted_strings=analysis.extracted_strings,
+            md5=analysis.md5,
+            sha1=analysis.sha1,
+            yara_matches=analysis.yara_matches,
         )
     else:
         artifact.analysis.status = analysis.status
@@ -243,4 +273,23 @@ def persist_artifact_analysis(
         artifact.analysis.sections = analysis.sections
         artifact.analysis.imports = analysis.imports
         artifact.analysis.extracted_strings = analysis.extracted_strings
+        artifact.analysis.md5 = analysis.md5
+        artifact.analysis.sha1 = analysis.sha1
+        artifact.analysis.yara_matches = analysis.yara_matches
+
+    # Synchronize IOC records
+    artifact.iocs.clear()
+    for item in analysis.iocs:
+        ioc_record = IOCRecord(
+            incident_id=artifact.incident_id,
+            artifact_id=artifact.id,
+            ioc_type=item["ioc_type"],
+            value=item["value"],
+            normalized_value=item["normalized_value"],
+            source=item["source"],
+            context=item.get("context", {}),
+        )
+        artifact.iocs.append(ioc_record)
+
     return artifact.analysis
+

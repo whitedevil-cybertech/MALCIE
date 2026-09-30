@@ -1,11 +1,13 @@
-from __future__ import annotations
-
+import hashlib
 import struct
+import sys
 from email.message import EmailMessage
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from app.models import Artifact
+from app.services.email_intake import evidence_root, hash_bytes
 from app.services.pe_static_analysis import analyze_artifact
 
 
@@ -178,8 +180,50 @@ def test_static_analysis_missing_artifact_file_is_handled() -> None:
         content_type="application/octet-stream",
         size=1,
         sha256="0" * 64,
-        storage_path="/tmp/non-existent-file.exe",
+        storage_path=str(evidence_root() / "missing.exe"),
     )
     analysis = analyze_artifact(artifact)
     assert analysis.status == "failed"
     assert "does not exist" in (analysis.error_message or "")
+
+
+def test_static_analysis_path_outside_storage_is_blocked() -> None:
+    fake_outside = (
+        Path("C:/Windows/win.ini")
+        if sys.platform.startswith("win")
+        else Path("/etc/passwd")
+    )
+    artifact = Artifact(
+        id=1,
+        incident_id=1,
+        email_id=1,
+        filename="outside.exe",
+        content_type="application/octet-stream",
+        size=1,
+        sha256="0" * 64,
+        storage_path=str(fake_outside.resolve()),
+    )
+    analysis = analyze_artifact(artifact)
+    assert analysis.status == "failed"
+    assert "outside evidence storage" in (analysis.error_message or "")
+
+
+def test_static_analysis_empty_artifact_returns_failed(client: TestClient) -> None:
+    incident_id = _create_incident(client)
+    artifact_id = _upload_artifact(client, incident_id, "empty.bin", b"")
+
+    response = client.post(f"/api/v1/artifacts/{artifact_id}/analyze-static")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["is_pe"] is False
+    assert "empty" in (body["error_message"] or "").lower()
+
+
+def test_sha256_deterministic_hashing() -> None:
+    test_data = b"MALCIE deterministic hashing test vector"
+    expected = hashlib.sha256(test_data).hexdigest()
+    assert hash_bytes(test_data) == expected
+    assert hash_bytes(b"") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+

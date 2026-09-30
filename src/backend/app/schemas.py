@@ -50,6 +50,20 @@ class ArtifactRead(BaseModel):
     sha256: str
 
 
+class IOCRecordRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    incident_id: int
+    artifact_id: int | None
+    ioc_type: str
+    value: str
+    normalized_value: str
+    source: str
+    context: dict[str, object]
+    created_at: datetime
+
+
 class ArtifactAnalysisRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -64,8 +78,13 @@ class ArtifactAnalysisRead(BaseModel):
     sections: list[dict[str, str | int | float]]
     imports: list[dict[str, object]]
     extracted_strings: list[str]
+    md5: str | None = None
+    sha1: str | None = None
+    yara_matches: list[dict[str, object]] = []
+    iocs: list[IOCRecordRead] = []
     created_at: datetime
     updated_at: datetime
+
 
 
 class EmailEvidenceRead(BaseModel):

@@ -27,6 +27,10 @@ class Incident(Base):
     artifacts: Mapped[list[Artifact]] = relationship(
         back_populates="incident", cascade="all, delete-orphan"
     )
+    iocs: Mapped[list[IOCRecord]] = relationship(
+        back_populates="incident", cascade="all, delete-orphan"
+    )
+
 
 
 class EmailEvidence(Base):
@@ -75,6 +79,9 @@ class Artifact(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    iocs: Mapped[list[IOCRecord]] = relationship(
+        back_populates="artifact", cascade="all, delete-orphan"
+    )
 
 
 class ArtifactAnalysis(Base):
@@ -96,6 +103,9 @@ class ArtifactAnalysis(Base):
     sections: Mapped[list[dict[str, str | int | float]]] = mapped_column(JSON, default=list)
     imports: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
     extracted_strings: Mapped[list[str]] = mapped_column(JSON, default=list)
+    md5: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    sha1: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    yara_matches: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -105,3 +115,36 @@ class ArtifactAnalysis(Base):
 
     artifact: Mapped[Artifact] = relationship(back_populates="analysis")
     incident: Mapped[Incident] = relationship()
+
+    @property
+    def iocs(self) -> list[IOCRecord]:
+        if hasattr(self, "_iocs_override") and self._iocs_override is not None:
+            return self._iocs_override
+        return self.artifact.iocs if self.artifact else []
+
+    @iocs.setter
+    def iocs(self, value: list[IOCRecord]) -> None:
+        self._iocs_override = value
+
+
+
+class IOCRecord(Base):
+    __tablename__ = "ioc_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    incident_id: Mapped[int] = mapped_column(
+        ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    artifact_id: Mapped[int | None] = mapped_column(
+        ForeignKey("artifacts.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    ioc_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_value: Mapped[str] = mapped_column(String(1024), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(100), nullable=False)
+    context: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    incident: Mapped[Incident] = relationship(back_populates="iocs")
+    artifact: Mapped[Artifact | None] = relationship(back_populates="iocs")
+

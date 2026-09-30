@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import Incident
-from app.schemas import IncidentCreate, IncidentRead
+from app.schemas import IncidentCreate, IncidentRead, IOCRecordRead
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 DB_SESSION = Depends(get_db)
@@ -24,3 +24,12 @@ def get_incident(incident_id: int, db: Session = DB_SESSION) -> Incident:
     if incident is None:
         raise HTTPException(status_code=404, detail="Incident not found")
     return incident
+
+
+@router.get("/{incident_id}/iocs", response_model=list[IOCRecordRead])
+def get_incident_iocs(incident_id: int, db: Session = DB_SESSION) -> list[IOCRecordRead]:
+    incident = db.get(Incident, incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return incident.iocs
+

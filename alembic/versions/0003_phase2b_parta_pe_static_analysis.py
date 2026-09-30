@@ -5,8 +5,8 @@ Revises: 0002_phase2a_email_intake
 Create Date: 2026-09-01
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "0003_phase2b_parta_pe_static_analysis"
@@ -36,8 +36,15 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("artifact_id"),
     )
-    op.create_index(op.f("ix_artifact_analyses_artifact_id"), "artifact_analyses", ["artifact_id"], unique=True)
+    op.create_index(
+        op.f("ix_artifact_analyses_artifact_id"),
+        "artifact_analyses",
+        ["artifact_id"],
+        unique=True,
+    )
     op.create_index(op.f("ix_artifact_analyses_id"), "artifact_analyses", ["id"], unique=False)
+
+
 
 
 def downgrade() -> None:

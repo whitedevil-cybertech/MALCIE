@@ -13,10 +13,12 @@ class Settings(BaseSettings):
     graph_scope: str = "offline_access Mail.Read"
 
     artifact_storage_path: str = "artifacts"
+    yara_rules_path: str = "rules/yara"
     max_eml_size_bytes: int = 10 * 1024 * 1024
     max_attachment_size_bytes: int = 25 * 1024 * 1024
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
 
 
 settings = Settings()
