@@ -3,8 +3,8 @@ from __future__ import annotations
 import base64
 from typing import Any
 
-from fastapi.testclient import TestClient
 import httpx
+from fastapi.testclient import TestClient
 
 from app.api.emails import get_graph_client
 from app.api.threat_intel import get_virustotal_client
@@ -189,7 +189,10 @@ def test_graph_webhook_validation_and_notifications(client: TestClient) -> None:
                     "changeType": "created",
                     "clientState": "test-webhook-secret",
                     "resource": "Users/victim@example.com/Messages/msg-phish-101",
-                    "resourceData": {"id": "msg-phish-101", "@odata.type": "#Microsoft.Graph.Message"},
+                    "resourceData": {
+                        "id": "msg-phish-101",
+                        "@odata.type": "#Microsoft.Graph.Message",
+                    },
                 },
                 {
                     "subscriptionId": "sub-uuid-999",
@@ -448,7 +451,9 @@ class FakeVirusTotalService(VirusTotalClient):
                 harmless_votes=0,
                 undetected_votes=10,
                 total_engines=64,
-                detection_details={"VendorMalware": {"category": "malicious", "result": "Worm.Generic"}},
+                detection_details={
+                    "VendorMalware": {"category": "malicious", "result": "Worm.Generic"}
+                },
             )
         elif normalized_type == "url":
             return VTLookupResult(
@@ -462,7 +467,9 @@ class FakeVirusTotalService(VirusTotalClient):
                 harmless_votes=2,
                 undetected_votes=45,
                 total_engines=66,
-                detection_details={"VendorPhish": {"category": "malicious", "result": "Phishing.Portal"}},
+                detection_details={
+                    "VendorPhish": {"category": "malicious", "result": "Phishing.Portal"}
+                },
             )
         elif normalized_type == "domain":
             return VTLookupResult(
