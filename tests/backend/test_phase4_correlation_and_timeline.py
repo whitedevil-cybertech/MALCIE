@@ -50,7 +50,9 @@ class MockVTService(VirusTotalClient):
                 harmless_votes=0,
                 undetected_votes=20,
                 total_engines=65,
-                detection_details={"EngineX": {"category": "malicious", "result": "Trojan.Dropper"}},
+                detection_details={
+                    "EngineX": {"category": "malicious", "result": "Trojan.Dropper"}
+                },
             )
         elif norm_type in {"url", "domain"}:
             return VTLookupResult(
@@ -221,7 +223,10 @@ def test_full_pipeline_evidence_correlation_linkages(client: TestClient) -> None
     for i in range(len(timeline) - 1):
         t1 = datetime.fromisoformat(timeline[i]["timestamp"])
         t2 = datetime.fromisoformat(timeline[i + 1]["timestamp"])
-        assert t1 <= t2, f"Timeline event {timeline[i]['event_type']} ({t1}) not before {timeline[i+1]['event_type']} ({t2})"
+        assert t1 <= t2, (
+            f"Timeline event {timeline[i]['event_type']} ({t1}) not before "
+            f"{timeline[i + 1]['event_type']} ({t2})"
+        )
 
 
 def test_correlation_idempotence_and_retrieval(client: TestClient) -> None:
