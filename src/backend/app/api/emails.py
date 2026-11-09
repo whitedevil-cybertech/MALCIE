@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from fastapi import (
@@ -8,6 +9,7 @@ from fastapi import (
     Depends,
     File,
     Form,
+    Header,
     HTTPException,
     Query,
     Request,
@@ -41,6 +43,7 @@ from app.services.email_intake import (
 from app.services.graph_client import GraphClient, get_graph_client
 
 logger = logging.getLogger(__name__)
+_seen_webhook_ids: dict[str, float] = {}
 
 router = APIRouter(prefix="/emails", tags=["emails"])
 DB_SESSION = Depends(get_db)
@@ -132,18 +135,21 @@ def graph_exchange_token(
     token_payload = graph_client.exchange_code_for_token(
         code=payload.code,
         redirect_uri=payload.redirect_uri,
+        state=payload.state,
     )
     return GraphTokenResponse(**token_payload)
 
 
 @router.get("/graph/messages", response_model=list[GraphMessageSummary])
 def list_graph_messages(
-    access_token: str,
+    access_token: str | None = None,
+    authorization: str | None = Header(default=None),
     folder_id: str = "inbox",
     top: int = 10,
     search: str | None = None,
     graph_client: GraphClient = GRAPH_SERVICE,
 ) -> list[GraphMessageSummary]:
+    access_token = _resolve_graph_token(access_token, authorization)
     messages = graph_client.list_messages(
         access_token=access_token,
         folder_id=folder_id,
@@ -231,9 +237,11 @@ def create_graph_subscription(
 @router.delete("/graph/subscriptions/{subscription_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_graph_subscription(
     subscription_id: str,
-    access_token: str,
+    access_token: str | None = None,
+    authorization: str | None = Header(default=None),
     graph_client: GraphClient = GRAPH_SERVICE,
 ) -> Response:
+    access_token = _resolve_graph_token(access_token, authorization)
     success = graph_client.delete_subscription(
         access_token=access_token,
         subscription_id=subscription_id,
@@ -246,11 +254,32 @@ def delete_graph_subscription(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+def _resolve_graph_token(access_token: str | None, authorization: str | None) -> str:
+    if authorization:
+        scheme, _, value = authorization.partition(" ")
+        if scheme.lower() == "bearer" and value:
+            return value
+    if settings.app_env.lower() in {"production", "prod"}:
+        raise HTTPException(
+            status_code=401,
+            detail="Graph bearer token must be supplied in Authorization header",
+        )
+    if access_token:
+        return access_token
+    raise HTTPException(status_code=400, detail="Graph access token is required")
+
+
 @router.post("/graph/webhook")
 async def graph_webhook(
     request: Request,
     validationToken: str | None = Query(None),
 ) -> Response:
+    if request.headers.get("content-length"):
+        try:
+            if int(request.headers["content-length"]) > settings.graph_webhook_max_body_bytes:
+                raise HTTPException(status_code=413, detail="Webhook payload exceeds size limit")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length") from None
     # 1. Handle Microsoft Graph validation handshake
     if validationToken:
         logger.info("Handling Microsoft Graph webhook validation handshake")
@@ -267,10 +296,31 @@ async def graph_webhook(
         raise HTTPException(status_code=400, detail="Invalid JSON payload") from None
 
     notifications = body.get("value", [])
+    if not isinstance(notifications, list):
+        raise HTTPException(status_code=400, detail="Webhook value must be an array")
+    if len(notifications) > settings.graph_webhook_max_notifications:
+        raise HTTPException(status_code=413, detail="Too many webhook notifications")
     expected_client_state = settings.graph_webhook_client_state
+    if settings.app_env.lower() in {"production", "prod"} and not expected_client_state:
+        raise HTTPException(status_code=503, detail="Webhook client state is not configured")
 
     processed = 0
     for notif in notifications:
+        if not isinstance(notif, dict):
+            continue
+        notification_id = notif.get("id")
+        now = time.time()
+        if notification_id:
+            _seen_webhook_ids.update(
+                {
+                    key: timestamp
+                    for key, timestamp in _seen_webhook_ids.items()
+                    if now - timestamp < 600
+                }
+            )
+            if notification_id in _seen_webhook_ids:
+                continue
+            _seen_webhook_ids[notification_id] = now
         client_state = notif.get("clientState")
         if expected_client_state and client_state != expected_client_state:
             logger.warning("Rejected webhook notification with mismatched clientState")

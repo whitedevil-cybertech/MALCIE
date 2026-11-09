@@ -15,11 +15,11 @@ MALCIE is a malware-centric incident investigation and digital forensics platfor
   - **Phase 2B-Part B (Detection, IOC Extraction & Result Completion):** COMPLETED & VERIFIED
 - **Phase 3: Email & Threat Integration** — COMPLETED & VERIFIED
 - **Phase 4: Correlation & Linkage Engine** — **COMPLETED & VERIFIED**
-- **Next Phase:** **Phase 5 — Endpoint Telemetry Integration** (Windows Sysmon event ingestion, process-to-hash linkage, network telemetry correlation)
+- **Phase 5: Endpoint Telemetry Integration** — **COMPLETED & VERIFIED**
 
 ### Test & Code Quality Status
 
-- **Backend Unit & Integration Tests:** **38 / 38 PASSING** (`pytest tests/backend -v`)
+- **Backend Unit & Integration Tests:** **48 / 48 PASSING** (`pytest tests/backend -q`)
 - **Backend Linting & Formatting:** **PASSING** (`ruff check src/backend/app tests/backend alembic`) with zero errors
 - **Frontend Component Tests:** **PASSING** (`vitest run` in `src/frontend`)
 
@@ -97,6 +97,15 @@ MALCIE is a malware-centric incident investigation and digital forensics platfor
 - **Database Persistence:**
   - Managed via Alembic migration `0006_phase4_correlation_timeline.py` storing `CorrelationResult` and `TimelineEvent` records.
 
+### 7. Sysmon Endpoint Telemetry (Phase 5)
+- Supports Sysmon Event IDs 1, 3, 11, 12, 13, and 14 for process, network, file, and registry activity.
+- Accepts XML and JSON, validates event IDs, and normalizes timestamps to UTC.
+- Preserves raw evidence, hostname, endpoint identity, process relationships, optional hashes, network details, registry details, and provenance.
+- Uses deterministic SHA-256 fingerprints with a database uniqueness constraint for idempotent ingestion.
+- Associates events with an explicit incident or, when omitted, only with a unique artifact-hash/network-IOC match.
+- Extends artifact/IOC correlation, explainable risk scoring, and chronological incident timelines.
+- Persists endpoint events with Alembic migration `0007_phase5_sysmon_telemetry.py`.
+
 ---
 
 ## Analysis & Detection Pipeline
@@ -166,7 +175,8 @@ MALCIE/
 │       ├── 0003_phase2b_parta_pe_static_analysis.py
 │       ├── 0004_phase2b_partb_yara_ioc.py
 │       ├── 0005_phase3_threat_intel_reputation.py
-│       └── 0006_phase4_correlation_timeline.py
+│       ├── 0006_phase4_correlation_timeline.py
+│       └── 0007_phase5_sysmon_telemetry.py
 ├── Markdown_Files/
 │   ├── PRD.md
 │   ├── Phases.md                  # Project roadmap & acceptance criteria
@@ -186,7 +196,8 @@ MALCIE/
 │   │   │   │   ├── emails.py      # EML upload, Graph OAuth, polling, webhooks
 │   │   │   │   ├── health.py      # Health check endpoint
 │   │   │   │   ├── incidents.py   # Incident management, correlation & timeline
-│   │   │   │   └── threat_intel.py # VirusTotal enrichment & reputation persistence
+│   │   │   │   ├── threat_intel.py # VirusTotal enrichment & reputation persistence
+│   │   │   │   └── telemetry.py   # Sysmon ingestion and endpoint event retrieval
 │   │   │   ├── core/
 │   │   │   │   └── config.py      # Application settings & environment vars
 │   │   │   ├── db.py              # SQLAlchemy engine & session factory
@@ -242,6 +253,19 @@ MALCIE/
 
 ## API Endpoints Reference
 
+In `APP_ENV=production`, API routes require the configured `API_KEY` via
+`X-API-Key` or `Authorization: Bearer`. Microsoft Graph webhook validation and
+notifications remain reachable without that application key and are protected
+by the configured Graph `clientState`; use network-level ingress controls in
+production. This key is not a substitute for user/role or incident-level
+authorization.
+
+Graph OAuth callbacks require an allowlisted `GRAPH_REDIRECT_URIS` value and a
+signed, expiring state returned by `/graph/auth-url`. Configure
+`GRAPH_CLIENT_SECRET`, `GRAPH_REDIRECT_URIS`, and
+`GRAPH_WEBHOOK_CLIENT_STATE` through a secret manager or deployment environment,
+never source control.
+
 ### Health & Management
 - `GET /` - Root status
 - `GET /api/v1/health` - Health check
@@ -253,6 +277,11 @@ MALCIE/
 - `POST /api/v1/incidents/{incident_id}/correlate` - Execute correlation engine, evaluate confidence/risk, and generate timeline
 - `GET /api/v1/incidents/{incident_id}/correlations` - Retrieve existing correlation results and linkages
 - `GET /api/v1/incidents/{incident_id}/timeline` - Retrieve chronological incident event timeline
+- `GET /api/v1/incidents/{incident_id}/telemetry` - Retrieve normalized endpoint events for an incident
+
+### Endpoint Telemetry (Phase 5)
+- `POST /api/v1/telemetry/upload` - Ingest Sysmon XML or JSON; optionally pass `incident_id`
+- `GET /api/v1/telemetry/incidents/{incident_id}` - Retrieve incident-scoped endpoint events
 
 ### Email & Intake (Phases 2A & 3)
 - `GET /api/v1/emails/graph/auth-url` - Generate Microsoft Graph OAuth authorization URL
@@ -290,7 +319,7 @@ From repository root (using virtual environment):
 # Run Ruff lint checks
 .venv\Scripts\python -m ruff check src/backend/app tests/backend alembic
 
-# Run all 38 backend test suites
+# Run all 41 backend tests
 .venv\Scripts\python -m pytest tests/backend -v
 ```
 
@@ -308,4 +337,4 @@ npm run test
 - **Static Analysis Only:** Artifacts are strictly inspected statically in-memory. Binary execution, emulation, and dynamic sandboxing are deliberately excluded from this layer.
 - **YARA as Evidence:** YARA detections represent evidentiary findings associated with artifacts; they contribute to explainable risk scoring rather than acting as opaque verdicts.
 - **Evidence Immutability:** Original uploaded emails, binaries, and logs are stored unchanged. Correlation and timeline events are derived entities without modifying underlying evidence.
-- **Endpoint Telemetry Deferred:** Sysmon log collection, process-creation tree mapping, and network telemetry linkage are scheduled for **Phase 5**.
+- **Endpoint scope:** Sysmon ingestion is an evidence collector only; MALCIE does not execute binaries, provide EDR/live monitoring, or sandbox files.

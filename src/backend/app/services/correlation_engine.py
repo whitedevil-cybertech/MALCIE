@@ -239,6 +239,52 @@ def build_evidence_linkages(incident: Incident) -> list[LinkageItem]:
                 )
             )
 
+    for event in incident.endpoint_events:
+        for digest in event.hashes.values():
+            for artifact in incident.artifacts:
+                if digest.lower() == artifact.sha256.lower():
+                    linkages.append(
+                        LinkageItem(
+                            source_type="endpoint_event",
+                            source_id=event.id,
+                            target_type="artifact",
+                            target_id=artifact.id,
+                            relation="ENDPOINT_HASH_MATCH",
+                            description=(
+                                f"Endpoint event {event.event_id} on "
+                                f"{event.hostname or 'unknown host'} observed artifact "
+                                f"'{artifact.filename}'"
+                            ),
+                            metadata={
+                                "hash": digest,
+                                "hostname": event.hostname,
+                                "image": event.image,
+                            },
+                        )
+                    )
+        for ioc in incident.iocs:
+            observed = {event.destination_ip, event.destination_hostname}
+            if ioc.normalized_value.lower().rstrip("/") in {
+                str(v).lower().rstrip("/") for v in observed if v
+            }:
+                linkages.append(
+                    LinkageItem(
+                        source_type="endpoint_event",
+                        source_id=event.id,
+                        target_type="ioc",
+                        target_id=ioc.id,
+                        relation="ENDPOINT_NETWORK_IOC_MATCH",
+                        description=(
+                            f"Endpoint event {event.event_id} contacted "
+                            f"{ioc.normalized_value}"
+                        ),
+                        metadata={
+                            "hostname": event.hostname,
+                            "destination_port": event.destination_port,
+                        },
+                    )
+                )
+
     return linkages
 
 
@@ -325,9 +371,8 @@ def compute_incident_risk(incident: Incident) -> RiskAssessment:
                     f"VirusTotal flagged file hash '{ti.normalized_value[:16]}...' with "
                     f"{ti.malicious_votes} malicious detections (+{pts})"
                 )
-            elif (
-                ti.malicious_votes >= 1
-                or (ti.reputation_score is not None and ti.reputation_score < -20)
+            elif ti.malicious_votes >= 1 or (
+                ti.reputation_score is not None and ti.reputation_score < -20
             ):
                 pts = 15
                 score += pts
@@ -383,9 +428,7 @@ def compute_incident_risk(incident: Incident) -> RiskAssessment:
     # 6. Phishing Indicators in Email
     for email in incident.emails:
         has_exec = any(
-            art.filename.lower().endswith(
-                (".exe", ".dll", ".vbs", ".ps1", ".bat", ".scr", ".bin")
-            )
+            art.filename.lower().endswith((".exe", ".dll", ".vbs", ".ps1", ".bat", ".scr", ".bin"))
             for art in email.artifacts
         )
         if (email.urls or email.domains) and has_exec:
@@ -396,6 +439,43 @@ def compute_incident_risk(incident: Incident) -> RiskAssessment:
                 f"Phishing indicator: email '{subj}' contains embedded links "
                 f"and executable attachments (+{pts})"
             )
+
+    endpoint_hash_matches = sum(
+        1
+        for event in incident.endpoint_events
+        if any(
+            digest.lower() == artifact.sha256.lower()
+            for digest in event.hashes.values()
+            for artifact in incident.artifacts
+        )
+    )
+    if endpoint_hash_matches:
+        points = min(25, endpoint_hash_matches * 15)
+        score += points
+        reasons.append(
+            f"Endpoint telemetry observed execution or file activity matching "
+            f"{endpoint_hash_matches} artifact hash(es) (+{points})"
+        )
+    endpoint_network_matches = sum(
+        1
+        for event in incident.endpoint_events
+        if any(
+            ioc.normalized_value.lower().rstrip("/")
+            in {
+                str(value).lower().rstrip("/")
+                for value in (event.destination_ip, event.destination_hostname)
+                if value
+            }
+            for ioc in incident.iocs
+        )
+    )
+    if endpoint_network_matches:
+        points = min(20, endpoint_network_matches * 10)
+        score += points
+        reasons.append(
+            f"Endpoint telemetry contacted {endpoint_network_matches} known network IOC(s) "
+            f"(+{points})"
+        )
 
     score = min(score, 100)
 
@@ -418,6 +498,39 @@ def compute_incident_risk(incident: Incident) -> RiskAssessment:
 
 def generate_incident_timeline(incident: Incident) -> list[TimelineEvent]:
     events: list[TimelineEvent] = []
+
+    for endpoint_event in incident.endpoint_events:
+        event_names = {
+            1: "PROCESS_CREATED",
+            3: "NETWORK_CONNECTION",
+            11: "FILE_CREATED",
+            12: "REGISTRY_OBJECT_CREATED",
+            13: "REGISTRY_VALUE_SET",
+            14: "REGISTRY_OBJECT_RENAMED",
+        }
+        events.append(
+            TimelineEvent(
+                incident_id=incident.id,
+                timestamp=_ensure_utc(endpoint_event.timestamp),
+                event_type=event_names.get(endpoint_event.event_id, "ENDPOINT_EVENT"),
+                source="sysmon",
+                description=(
+                    f"Sysmon Event ID {endpoint_event.event_id} on "
+                    f"{endpoint_event.hostname or 'unknown host'}"
+                ),
+                event_data={
+                    "endpoint_event_id": endpoint_event.id,
+                    "event_id": endpoint_event.event_id,
+                    "hostname": endpoint_event.hostname,
+                    "endpoint_id": endpoint_event.endpoint_id,
+                    "image": endpoint_event.image,
+                    "destination_ip": endpoint_event.destination_ip,
+                    "destination_hostname": endpoint_event.destination_hostname,
+                    "destination_port": endpoint_event.destination_port,
+                    "fingerprint": endpoint_event.fingerprint,
+                },
+            )
+        )
 
     # 1. Emails
     for email in incident.emails:
@@ -579,9 +692,7 @@ def run_incident_correlation(db: Session, incident_id: int) -> CorrelationRespon
 
     # Persist or update CorrelationResult
     corr_record = (
-        db.execute(
-            select(CorrelationResult).where(CorrelationResult.incident_id == incident_id)
-        )
+        db.execute(select(CorrelationResult).where(CorrelationResult.incident_id == incident_id))
         .scalars()
         .first()
     )

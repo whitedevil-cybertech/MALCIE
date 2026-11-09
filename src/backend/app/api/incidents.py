@@ -6,10 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Incident
+from app.models import EndpointEvent, Incident
 from app.schemas import (
     ConfidenceAssessment,
     CorrelationResponse,
+    EndpointEventRead,
     IncidentCreate,
     IncidentRead,
     IOCRecordRead,
@@ -106,3 +107,17 @@ def get_incident_timeline(
         )
         for ev in events
     ]
+
+
+@router.get("/{incident_id}/telemetry", response_model=list[EndpointEventRead])
+def get_incident_endpoint_telemetry(
+    incident_id: int,
+    db: Session = DB_SESSION,
+) -> list[EndpointEvent]:
+    _get_incident_or_404(db, incident_id)
+    return list(
+        db.query(EndpointEvent)
+        .filter(EndpointEvent.incident_id == incident_id)
+        .order_by(EndpointEvent.timestamp.asc(), EndpointEvent.fingerprint.asc())
+        .all()
+    )

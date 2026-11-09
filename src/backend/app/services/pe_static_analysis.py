@@ -227,6 +227,19 @@ def analyze_artifact(artifact: Artifact) -> PEAnalysisData:
             extracted_strings=[],
         )
 
+    if hashlib.sha256(content).hexdigest() != artifact.sha256:
+        logger.error("Artifact integrity check failed: artifact_id=%s", artifact.id)
+        return PEAnalysisData(
+            status="failed",
+            error_message="Artifact content hash does not match stored SHA-256",
+            is_pe=False,
+            file_type=None,
+            pe_headers={},
+            sections=[],
+            imports=[],
+            extracted_strings=[],
+        )
+
     analysis = _parse_pe(content)
     if content:
         analysis.md5 = hashlib.md5(content).hexdigest()
@@ -292,4 +305,3 @@ def persist_artifact_analysis(
         artifact.iocs.append(ioc_record)
 
     return artifact.analysis
-

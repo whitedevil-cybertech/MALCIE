@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import logging
 import secrets
 import time
@@ -100,7 +104,13 @@ class GraphClient:
         )
 
     def build_auth_url(self, redirect_uri: str) -> tuple[str, str]:
-        state = secrets.token_urlsafe(32)
+        self._validate_redirect_uri(redirect_uri)
+        payload = {
+            "redirect_uri": redirect_uri,
+            "issued_at": int(time.time()),
+            "nonce": secrets.token_urlsafe(24),
+        }
+        state = self._sign_state(payload)
         params = {
             "client_id": settings.graph_client_id,
             "response_type": "code",
@@ -112,7 +122,13 @@ class GraphClient:
         url = f"https://login.microsoftonline.com/{settings.graph_tenant_id}/oauth2/v2.0/authorize"
         return f"{url}?{urlencode(params)}", state
 
-    def exchange_code_for_token(self, code: str, redirect_uri: str) -> dict[str, str | int]:
+    def exchange_code_for_token(
+        self, code: str, redirect_uri: str, state: str
+    ) -> dict[str, str | int]:
+        self._validate_redirect_uri(redirect_uri)
+        state_data = self._verify_state(state)
+        if state_data["redirect_uri"] != redirect_uri:
+            raise HTTPException(status_code=400, detail="OAuth state redirect mismatch")
         token_url = (
             f"https://login.microsoftonline.com/{settings.graph_tenant_id}/oauth2/v2.0/token"
         )
@@ -142,6 +158,50 @@ class GraphClient:
             "expires_in": int(token_data.get("expires_in", 0)),
             "refresh_token": token_data.get("refresh_token"),
         }
+
+    @staticmethod
+    def _allowed_redirect_uris() -> set[str]:
+        return {
+            value.strip()
+            for value in settings.graph_redirect_uris.split(",")
+            if value.strip()
+        }
+
+    @classmethod
+    def _validate_redirect_uri(cls, redirect_uri: str) -> None:
+        if redirect_uri not in cls._allowed_redirect_uris():
+            raise HTTPException(status_code=400, detail="Unapproved OAuth redirect URI")
+
+    @staticmethod
+    def _state_secret() -> bytes:
+        secret = settings.graph_client_secret
+        if not secret:
+            raise HTTPException(status_code=503, detail="OAuth state signing is not configured")
+        return secret.encode()
+
+    @classmethod
+    def _sign_state(cls, payload: dict[str, Any]) -> str:
+        encoded = base64.urlsafe_b64encode(
+            json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+        ).rstrip(b"=")
+        signature = hmac.new(cls._state_secret(), encoded, hashlib.sha256).digest()
+        return f"{encoded.decode()}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode()}"
+
+    @classmethod
+    def _verify_state(cls, state: str) -> dict[str, Any]:
+        try:
+            encoded_text, signature_text = state.split(".", 1)
+            encoded = encoded_text.encode()
+            expected = hmac.new(cls._state_secret(), encoded, hashlib.sha256).digest()
+            supplied = base64.urlsafe_b64decode(signature_text + "===")
+            payload = json.loads(base64.urlsafe_b64decode(encoded + b"==="))
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+            raise HTTPException(status_code=400, detail="Invalid OAuth state") from None
+        if not hmac.compare_digest(supplied, expected):
+            raise HTTPException(status_code=400, detail="Invalid OAuth state")
+        if int(payload.get("issued_at", 0)) < int(time.time()) - 600:
+            raise HTTPException(status_code=400, detail="Expired OAuth state")
+        return payload
 
     def get_message_eml(self, access_token: str, message_id: str) -> GraphMessagePayload:
         endpoint = f"https://graph.microsoft.com/v1.0/me/messages/{message_id}/$value"

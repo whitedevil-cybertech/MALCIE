@@ -28,6 +28,7 @@ class GraphAuthUrlResponse(BaseModel):
 class GraphTokenExchangeRequest(BaseModel):
     code: str
     redirect_uri: str
+    state: str
 
 
 class GraphTokenResponse(BaseModel):
@@ -231,3 +232,41 @@ class TimelineEventRead(BaseModel):
     ioc_id: int | None = None
     event_data: dict[str, object] = {}
     created_at: datetime
+
+
+class EndpointEventRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    incident_id: int | None
+    event_id: int
+    timestamp: datetime
+    hostname: str | None
+    endpoint_id: str | None
+    user_name: str | None
+    process_guid: str | None
+    process_id: str | None
+    parent_process_guid: str | None
+    parent_process_id: str | None
+    image: str | None
+    command_line: str | None
+    hashes: dict[str, str]
+    destination_ip: str | None
+    destination_hostname: str | None
+    destination_port: int | None
+    protocol: str | None
+    target_filename: str | None
+    registry_key: str | None
+    registry_value_name: str | None
+    registry_value_data: str | None
+    raw_evidence: str
+    provenance: dict[str, object]
+    fingerprint: str
+    created_at: datetime
+
+
+class TelemetryUploadResponse(BaseModel):
+    ingested_count: int
+    duplicate_count: int
+    unassociated_count: int
+    events: list[EndpointEventRead]
