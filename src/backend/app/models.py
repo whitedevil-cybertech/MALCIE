@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -38,6 +48,9 @@ class Incident(Base):
     )
     timeline_events: Mapped[list[TimelineEvent]] = relationship(
         back_populates="incident", cascade="all, delete-orphan", order_by="TimelineEvent.timestamp"
+    )
+    endpoint_events: Mapped[list[EndpointEvent]] = relationship(
+        back_populates="incident", cascade="all, delete-orphan", order_by="EndpointEvent.timestamp"
     )
 
 
@@ -241,3 +254,39 @@ class TimelineEvent(Base):
     incident: Mapped[Incident] = relationship(back_populates="timeline_events")
     artifact: Mapped[Artifact | None] = relationship()
     ioc: Mapped[IOCRecord | None] = relationship()
+
+
+class EndpointEvent(Base):
+    __tablename__ = "endpoint_events"
+    __table_args__ = (UniqueConstraint("fingerprint", name="uq_endpoint_events_fingerprint"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    incident_id: Mapped[int | None] = mapped_column(
+        ForeignKey("incidents.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    event_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    hostname: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    endpoint_id: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
+    user_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    process_guid: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    process_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    parent_process_guid: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    parent_process_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    image: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    command_line: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hashes: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    destination_ip: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    destination_hostname: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
+    destination_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    protocol: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    target_filename: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    registry_key: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    registry_value_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    registry_value_data: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_evidence: Mapped[str] = mapped_column(Text, nullable=False)
+    provenance: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    incident: Mapped[Incident | None] = relationship(back_populates="endpoint_events")

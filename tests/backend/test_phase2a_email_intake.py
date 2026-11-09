@@ -38,7 +38,9 @@ class FakeGraphClient:
     def build_auth_url(self, redirect_uri: str) -> tuple[str, str]:
         return f"https://auth.local?redirect_uri={redirect_uri}", "state-token"
 
-    def exchange_code_for_token(self, code: str, redirect_uri: str) -> dict[str, str | int]:
+    def exchange_code_for_token(
+        self, code: str, redirect_uri: str, state: str
+    ) -> dict[str, str | int]:
         return {
             "access_token": "token123",
             "token_type": "Bearer",
@@ -115,7 +117,11 @@ def test_graph_endpoints_and_ingest_workflow(client: TestClient) -> None:
 
     token_response = client.post(
         "/api/v1/emails/graph/oauth/token",
-        json={"code": "abc", "redirect_uri": "https://localhost/callback"},
+        json={
+            "code": "abc",
+            "redirect_uri": "https://localhost/callback",
+            "state": "state-token",
+        },
     )
     assert token_response.status_code == 200
     assert token_response.json()["access_token"] == "token123"
