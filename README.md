@@ -2,23 +2,25 @@
 
 **M**alware **A**nalysis, **L**inkage, **C**orrelation and **I**nvestigation **E**ngine.
 
-MALCIE is a malware-centric incident investigation and digital forensics platform designed for security operations centers (SOCs) and incident responders. It automates suspicious email and binary intake, performs static PE binary inspection, executes in-memory YARA rule scanning, and extracts, normalizes, deduplicates, and associates Indicators of Compromise (IOCs) while preserving complete evidentiary provenance.
+MALCIE is a malware-centric incident investigation and digital forensics platform designed for security operations centers (SOCs) and incident responders. It automates suspicious email and binary intake, performs static PE binary inspection, executes in-memory YARA rule scanning, extracts and deduplicates Indicators of Compromise (IOCs) with evidentiary provenance, integrates with Microsoft Graph for email polling and webhooks, enriches indicators via the VirusTotal API v3, and correlates multi-stage evidence into unified timelines with deterministic confidence and risk scoring.
 
 ---
 
 ## Current Status
 
 - **Phase 1: Planning & Setup** — COMPLETED & VERIFIED
-- **Phase 2: Core Analysis Engine** — **COMPLETED & VERIFIED**
+- **Phase 2: Core Analysis Engine** — COMPLETED & VERIFIED
   - **Phase 2A (Email & Evidence Intake):** COMPLETED & VERIFIED
   - **Phase 2B-Part A (PE Static Analysis):** COMPLETED & VERIFIED
   - **Phase 2B-Part B (Detection, IOC Extraction & Result Completion):** COMPLETED & VERIFIED
-- **Next Phase:** **Phase 3 — Email & Threat Integration** (Microsoft Graph polling/webhooks & VirusTotal API v3 threat intelligence enrichment)
+- **Phase 3: Email & Threat Integration** — COMPLETED & VERIFIED
+- **Phase 4: Correlation & Linkage Engine** — **COMPLETED & VERIFIED**
+- **Next Phase:** **Phase 5 — Endpoint Telemetry Integration** (Windows Sysmon event ingestion, process-to-hash linkage, network telemetry correlation)
 
 ### Test & Code Quality Status
 
-- **Backend Unit & Integration Tests:** **24 / 24 PASSING** (`pytest tests/backend -v`)
-- **Backend Linting & Formatting:** **PASSING** (`ruff check src/backend/app tests/backend`) with zero errors
+- **Backend Unit & Integration Tests:** **38 / 38 PASSING** (`pytest tests/backend -v`)
+- **Backend Linting & Formatting:** **PASSING** (`ruff check src/backend/app tests/backend alembic`) with zero errors
 - **Frontend Component Tests:** **PASSING** (`vitest run` in `src/frontend`)
 
 ---
@@ -58,45 +60,93 @@ MALCIE is a malware-centric incident investigation and digital forensics platfor
   - Filters out binary libraries (`.dll`, `.exe`, `.sys`, `.pdb`) and false-positive domains.
 - **Provenance Preservation & Deduplication:**
   - Deduplicates repeated occurrences from the same source.
-  - Preserves distinct evidence provenance when the same indicator is found across multiple independent contexts (e.g. general strings vs. specific YARA rule matches).
+  - Preserves distinct evidence provenance when the same indicator is found across multiple independent contexts.
 - **Persistent Evidence Association:** Links extracted IOCs (`ioc_records`) directly to the originating artifact and incident hierarchy in the database.
+
+### 5. Microsoft Graph Polling, Webhooks & Threat Intelligence (Phase 3)
+- **Microsoft Graph Polling:**
+  - Mailbox querying across folders (`inbox`, `junkemail`, etc.) with message summaries.
+  - Automated batch ingestion (`auto_ingest=True`) fetching raw MIME, extracting attachments, and registering evidence under designated incidents.
+- **Microsoft Graph Webhook Notifications:**
+  - Webhook validation handshake handler responding to `validationToken` with plain-text verification.
+  - Asynchronous change notification ingestion with `clientState` signature validation.
+  - Subscription lifecycle management (create, list, delete).
+- **VirusTotal API v3 Threat Intelligence:**
+  - Enrichment for file hashes (SHA-256, MD5, SHA-1), URLs (unpadded base64url encoding), domains, and IP addresses.
+  - Extracted verdicts: reputation scores, malicious/suspicious/harmless/undetected votes, total engine counts, and detailed vendor detection breakdowns.
+- **Resilience & Rate-Limiting:**
+  - Multi-tiered caching (in-memory TTL cache + database cache lookup) to respect API quotas.
+  - Configurable timeouts and exponential backoff retry loops on HTTP 429 and transient 5xx errors.
+  - Graceful degradation: unconfigured API keys, missing indicators (404), or upstream downtime produce structured error statuses without interrupting incident analysis.
+- **Reputation Persistence:**
+  - Stores all enrichment records in `threat_intel_results` with foreign-key linkage to incidents, artifacts, and IOC records.
+
+### 6. Evidence Correlation, Confidence Scoring, Risk Assessment & Timeline (Phase 4)
+- **Evidence Linkage Engine:**
+  - Connects emails -> attachments -> cryptographic digests -> PE structure -> YARA matches -> IOC records -> threat intelligence verdicts.
+  - Detects cross-source corroboration: matching email URLs/domains with binary IOCs/strings, and linking malicious hash verdicts to artifacts.
+- **Confidence Scoring (`ConfidenceAssessment`):**
+  - Measures the *completeness and robustness of evidence linkages* (0.0% to 100.0%, categorized into `LOW`, `MEDIUM`, `HIGH`).
+  - Completely explainable breakdown of positive linkage factors.
+- **Rule-Based Risk Assessment (`RiskAssessment`):**
+  - Evaluates threat maliciousness (0 to 100, categorized into `NONE`, `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`).
+  - Rules inspect YARA detections, high-detection VT hashes, malicious network indicators, section entropy packing anomalies, suspicious process/downloader API imports, and phishing characteristics.
+  - **Strict Separation:** Correlation completeness is strictly separated from malware risk so clean artifacts never trigger false risk alarms.
+- **Chronological Incident Timeline:**
+  - Assembles events from email `sent_at`, PE compilation `TimeDateStamp`, attachment extraction, static analysis completion, YARA hits, IOC extractions, threat intelligence queries, and correlation runs into an ordered timeline.
+- **Database Persistence:**
+  - Managed via Alembic migration `0006_phase4_correlation_timeline.py` storing `CorrelationResult` and `TimelineEvent` records.
 
 ---
 
 ## Analysis & Detection Pipeline
 
 ```text
-               Uploaded / Ingested Artifact
-                           │
-                           ▼
-          Storage Boundary & Extension Validation
-                           │
-                           ▼
+               Uploaded / Ingested Artifact or Email
+                                │
+                                ▼
+              Storage Boundary & Extension Validation
+                                │
+                                ▼
               Deterministic Cryptographic Hashing
-                  (SHA-256, MD5, SHA-1)
-                           │
-                           ▼
-              Static PE Inspection (pefile)
-        (Headers, Sections, Entropy, Imports, Strings)
-                           │
-                           ▼
-            In-Memory YARA Scanning (yara-python)
-        (Compiled Rule Matching, Offsets, Metadata)
-                           │
-                           ▼
-                   IOC Extraction Engine
-        (Hashes, IPv4, IPv6, Domains, URLs, File Paths)
-                           │
-                           ▼
-              Normalization & Deduplication
-              (Preserves Multi-Source Provenance)
-                           │
-                           ▼
-           Database Persistence (Alembic Managed)
-          (ArtifactAnalysis + IOCRecord Relationships)
-                           │
-                           ▼
-         Consolidated Incident & Analysis API Output
+                    (SHA-256, MD5, SHA-1)
+                                │
+                                ▼
+                 Static PE Inspection (pefile)
+          (Headers, Sections, Entropy, Imports, Strings)
+                                │
+                                ▼
+              In-Memory YARA Scanning (yara-python)
+          (Compiled Rule Matching, Offsets, Metadata)
+                                │
+                                ▼
+                     IOC Extraction Engine
+          (Hashes, IPv4, IPv6, Domains, URLs, File Paths)
+                                │
+                                ▼
+                Normalization & Deduplication
+                (Preserves Multi-Source Provenance)
+                                │
+                                ▼
+             Threat Intelligence Enrichment (VirusTotal v3)
+             (Hashes, URLs, Domains, Reputation Persistence)
+                                │
+                                ▼
+             Correlation & Linkage Engine (Phase 4)
+          ┌─────────────────────┴─────────────────────┐
+          ▼                                           ▼
+   Evidence Linkages                           Chronological Timeline
+  (Email ↔ File ↔ IOC ↔ VT)                   (Email, PE, IOC, VT, Corr)
+          │                                           │
+          ├─► Confidence Scoring (Link Completeness)  │
+          └─► Risk Assessment (Malware Verdict)       │
+                                │                     │
+                                ▼                     ▼
+             Database Persistence (Alembic Managed)
+          (CorrelationResult + TimelineEvent Entities)
+                                │
+                                ▼
+           Consolidated Incident & Threat Intelligence Output
 ```
 
 ---
@@ -111,10 +161,12 @@ MALCIE/
 ├── alembic/
 │   ├── env.py                     # Alembic configuration supporting DATABASE_URL
 │   └── versions/
-│       ├── 0001_initial_schema.py
+│       ├── 0001_phase1_baseline.py
 │       ├── 0002_phase2a_email_intake.py
 │       ├── 0003_phase2b_parta_pe_static_analysis.py
-│       └── 0004_phase2b_partb_yara_ioc.py
+│       ├── 0004_phase2b_partb_yara_ioc.py
+│       ├── 0005_phase3_threat_intel_reputation.py
+│       └── 0006_phase4_correlation_timeline.py
 ├── Markdown_Files/
 │   ├── PRD.md
 │   ├── Phases.md                  # Project roadmap & acceptance criteria
@@ -123,26 +175,32 @@ MALCIE/
 │   ├── MALCIE Architecture.md
 │   └── MEMORY/                    # Chronological milestone memories
 │       ├── memory.md              # Phase 1 memory
-│       └── Memory_2.md            # Phase 2 memory
+│       ├── memory2.md             # Phase 2 memory
+│       ├── memory3.md             # Phase 3 memory
+│       └── memory4.md             # Phase 4 memory
 ├── src/
 │   ├── backend/
 │   │   ├── app/
 │   │   │   ├── api/
 │   │   │   │   ├── artifacts.py   # Upload, static analysis, artifact IOCs
-│   │   │   │   ├── emails.py      # EML upload, Graph OAuth & intake
+│   │   │   │   ├── emails.py      # EML upload, Graph OAuth, polling, webhooks
 │   │   │   │   ├── health.py      # Health check endpoint
-│   │   │   │   └── incidents.py   # Incident management & incident IOCs
+│   │   │   │   ├── incidents.py   # Incident management, correlation & timeline
+│   │   │   │   └── threat_intel.py # VirusTotal enrichment & reputation persistence
 │   │   │   ├── core/
 │   │   │   │   └── config.py      # Application settings & environment vars
 │   │   │   ├── db.py              # SQLAlchemy engine & session factory
 │   │   │   ├── main.py            # FastAPI entry point & router registration
-│   │   │   ├── models.py          # Incident, Email, Artifact, Analysis, IOCRecord
+│   │   │   ├── models.py          # SQLAlchemy models
 │   │   │   ├── schemas.py         # Pydantic v2 request/response schemas
 │   │   │   └── services/
+│   │   │       ├── correlation_engine.py   # Evidence correlation, scoring & timeline
 │   │   │       ├── email_intake.py         # EML parser & boundary checks
-│   │   │       ├── graph_client.py         # Microsoft Graph client
+│   │   │       ├── graph_client.py         # Microsoft Graph client & webhooks
 │   │   │       ├── ioc_extraction.py       # IOC extraction & normalization
 │   │   │       ├── pe_static_analysis.py   # PE analysis & persistence
+│   │   │       ├── threat_intel.py         # Threat intelligence orchestration
+│   │   │       ├── virustotal_client.py    # VirusTotal API v3 client
 │   │   │       └── yara_scanner.py         # YARA compilation & scanning
 │   │   ├── rules/
 │   │   │   └── yara/
@@ -159,7 +217,9 @@ MALCIE/
 │       ├── test_health.py
 │       ├── test_phase2a_email_intake.py
 │       ├── test_phase2b_pe_static_analysis.py
-│       └── test_phase2b_partb_analysis.py
+│       ├── test_phase2b_partb_analysis.py
+│       ├── test_phase3_graph_and_threat_intel.py
+│       └── test_phase4_correlation_and_timeline.py
 ├── .env.example
 ├── docker-compose.yml
 ├── Dockerfile
@@ -170,8 +230,10 @@ MALCIE/
 
 ## Technologies Used
 
-- **Backend:** Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2.0, Alembic, Uvicorn
+- **Backend:** Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2.0, Alembic, Uvicorn, HTTPX
 - **Analysis & Detection:** `pefile`, `yara-python`, standard-library `hashlib` & `ipaddress`
+- **External Threat Intelligence:** VirusTotal API v3 (files, URLs, domains, IPs)
+- **Email Ingestion:** Microsoft Graph Mail API v1.0 (OAuth 2.0, polling, webhooks)
 - **Database:** SQLite (development / testing) & PostgreSQL (production-ready via SQLAlchemy)
 - **Frontend:** React 18, TypeScript, Vite, Tailwind CSS, Vitest
 - **Testing & Quality:** `pytest`, `pytest-asyncio`, `ruff`
@@ -184,14 +246,22 @@ MALCIE/
 - `GET /` - Root status
 - `GET /api/v1/health` - Health check
 
-### Incidents
+### Incidents & Correlation (Phases 1 & 4)
 - `POST /api/v1/incidents` - Create new incident
 - `GET /api/v1/incidents/{incident_id}` - Retrieve incident details
 - `GET /api/v1/incidents/{incident_id}/iocs` - Retrieve all deduplicated IOCs linked to the incident
+- `POST /api/v1/incidents/{incident_id}/correlate` - Execute correlation engine, evaluate confidence/risk, and generate timeline
+- `GET /api/v1/incidents/{incident_id}/correlations` - Retrieve existing correlation results and linkages
+- `GET /api/v1/incidents/{incident_id}/timeline` - Retrieve chronological incident event timeline
 
-### Email & Intake (Phase 2A)
+### Email & Intake (Phases 2A & 3)
 - `GET /api/v1/emails/graph/auth-url` - Generate Microsoft Graph OAuth authorization URL
 - `POST /api/v1/emails/graph/oauth/token` - Exchange authorization code for token
+- `GET /api/v1/emails/graph/messages` - Query/list mailbox messages via Microsoft Graph
+- `POST /api/v1/emails/graph/poll` - Poll messages from mailbox with optional auto-ingest into incident
+- `POST /api/v1/emails/graph/subscriptions` - Create Microsoft Graph webhook subscription
+- `DELETE /api/v1/emails/graph/subscriptions/{subscription_id}` - Delete webhook subscription
+- `POST /api/v1/emails/graph/webhook` - Microsoft Graph validation handshake and change notification handler
 - `POST /api/v1/emails/graph/messages/{message_id}/ingest` - Ingest message MIME directly from Graph
 - `POST /api/v1/emails/upload-eml` - Upload `.eml` file for parsing and artifact extraction
 - `GET /api/v1/emails/{email_id}` - Retrieve stored email evidence
@@ -203,6 +273,13 @@ MALCIE/
 - `GET /api/v1/artifacts/{artifact_id}/analysis-static` - Retrieve complete analysis results including YARA matches and IOCs
 - `GET /api/v1/artifacts/{artifact_id}/iocs` - Retrieve structured IOCs associated with the artifact
 
+### Threat Intelligence & Reputation (Phase 3)
+- `POST /api/v1/incidents/{incident_id}/enrich` - Trigger VirusTotal v3 enrichment for all incident IOCs
+- `GET /api/v1/incidents/{incident_id}/threat-intel` - Retrieve persisted threat intelligence results for an incident
+- `POST /api/v1/artifacts/{artifact_id}/enrich` - Trigger VirusTotal v3 enrichment for artifact IOCs
+- `GET /api/v1/artifacts/{artifact_id}/threat-intel` - Retrieve persisted threat intelligence results for an artifact
+- `POST /api/v1/threat-intel/lookup` - Ad-hoc threat intelligence lookup for an individual IOC
+
 ---
 
 ## Running Verification & Tests
@@ -211,9 +288,9 @@ MALCIE/
 From repository root (using virtual environment):
 ```powershell
 # Run Ruff lint checks
-.venv\Scripts\python -m ruff check src/backend/app tests/backend
+.venv\Scripts\python -m ruff check src/backend/app tests/backend alembic
 
-# Run all 24 backend test suites
+# Run all 38 backend test suites
 .venv\Scripts\python -m pytest tests/backend -v
 ```
 
@@ -229,7 +306,6 @@ npm run test
 ## Current Scope & Intentional Limitations
 
 - **Static Analysis Only:** Artifacts are strictly inspected statically in-memory. Binary execution, emulation, and dynamic sandboxing are deliberately excluded from this layer.
-- **YARA as Evidence:** YARA detections represent evidentiary findings associated with artifacts; they do not trigger automated binary verdicts without analyst correlation.
-- **Threat Intelligence Deferred:** External VirusTotal API v3 lookup and enrichment are scheduled for **Phase 3**.
-- **Cross-Source Correlation Deferred:** Automatic correlation between email metadata, static analysis findings, and endpoint events is scheduled for **Phase 4**.
-- **Endpoint Telemetry Deferred:** Sysmon log collection and process-event linkage are scheduled for **Phase 5**.
+- **YARA as Evidence:** YARA detections represent evidentiary findings associated with artifacts; they contribute to explainable risk scoring rather than acting as opaque verdicts.
+- **Evidence Immutability:** Original uploaded emails, binaries, and logs are stored unchanged. Correlation and timeline events are derived entities without modifying underlying evidence.
+- **Endpoint Telemetry Deferred:** Sysmon log collection, process-creation tree mapping, and network telemetry linkage are scheduled for **Phase 5**.

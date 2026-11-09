@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -30,7 +30,15 @@ class Incident(Base):
     iocs: Mapped[list[IOCRecord]] = relationship(
         back_populates="incident", cascade="all, delete-orphan"
     )
-
+    threat_intel_results: Mapped[list[ThreatIntelResult]] = relationship(
+        back_populates="incident", cascade="all, delete-orphan"
+    )
+    correlation_result: Mapped[CorrelationResult | None] = relationship(
+        back_populates="incident", cascade="all, delete-orphan", uselist=False
+    )
+    timeline_events: Mapped[list[TimelineEvent]] = relationship(
+        back_populates="incident", cascade="all, delete-orphan", order_by="TimelineEvent.timestamp"
+    )
 
 
 class EmailEvidence(Base):
@@ -82,6 +90,9 @@ class Artifact(Base):
     iocs: Mapped[list[IOCRecord]] = relationship(
         back_populates="artifact", cascade="all, delete-orphan"
     )
+    threat_intel_results: Mapped[list[ThreatIntelResult]] = relationship(
+        back_populates="artifact", cascade="all, delete-orphan"
+    )
 
 
 class ArtifactAnalysis(Base):
@@ -127,7 +138,6 @@ class ArtifactAnalysis(Base):
         self._iocs_override = value
 
 
-
 class IOCRecord(Base):
     __tablename__ = "ioc_records"
 
@@ -147,4 +157,87 @@ class IOCRecord(Base):
 
     incident: Mapped[Incident] = relationship(back_populates="iocs")
     artifact: Mapped[Artifact | None] = relationship(back_populates="iocs")
+    threat_intel_results: Mapped[list[ThreatIntelResult]] = relationship(
+        back_populates="ioc", cascade="all, delete-orphan"
+    )
 
+
+class ThreatIntelResult(Base):
+    __tablename__ = "threat_intel_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    incident_id: Mapped[int] = mapped_column(
+        ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    artifact_id: Mapped[int | None] = mapped_column(
+        ForeignKey("artifacts.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    ioc_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ioc_records.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    ioc_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    ioc_value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_value: Mapped[str] = mapped_column(String(1024), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(50), default="VirusTotal", nullable=False)
+    query_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    reputation_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    malicious_votes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    suspicious_votes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    harmless_votes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    undetected_votes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_engines: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    detection_details: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    raw_response: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    queried_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    incident: Mapped[Incident] = relationship(back_populates="threat_intel_results")
+    artifact: Mapped[Artifact | None] = relationship(back_populates="threat_intel_results")
+    ioc: Mapped[IOCRecord | None] = relationship(back_populates="threat_intel_results")
+
+
+class CorrelationResult(Base):
+    __tablename__ = "correlation_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    incident_id: Mapped[int] = mapped_column(
+        ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    confidence_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    confidence_level: Mapped[str] = mapped_column(String(32), nullable=False, default="LOW")
+    confidence_reasons: Mapped[list[str]] = mapped_column(JSON, default=list)
+    risk_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    risk_level: Mapped[str] = mapped_column(String(32), nullable=False, default="LOW")
+    risk_reasons: Mapped[list[str]] = mapped_column(JSON, default=list)
+    linkages: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    incident: Mapped[Incident] = relationship(back_populates="correlation_result")
+
+
+class TimelineEvent(Base):
+    __tablename__ = "timeline_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    incident_id: Mapped[int] = mapped_column(
+        ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_id: Mapped[int | None] = mapped_column(
+        ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    ioc_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ioc_records.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    event_data: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    incident: Mapped[Incident] = relationship(back_populates="timeline_events")
+    artifact: Mapped[Artifact | None] = relationship()
+    ioc: Mapped[IOCRecord | None] = relationship()
