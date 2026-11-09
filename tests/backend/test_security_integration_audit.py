@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 
 from app.core.config import settings
 from app.models import Artifact
@@ -77,9 +78,9 @@ def test_graph_oauth_state_is_signed_and_redirect_bound(monkeypatch) -> None:
     monkeypatch.setattr(settings, "graph_redirect_uris", "https://app.example/callback")
     graph = GraphClient()
     _, state = graph.build_auth_url("https://app.example/callback")
-    with pytest.raises(Exception):
+    with pytest.raises(HTTPException, match="Invalid OAuth state"):
         graph._verify_state(f"{state}tampered")
-    with pytest.raises(Exception):
+    with pytest.raises(HTTPException, match="Unapproved OAuth redirect URI"):
         graph.build_auth_url("https://attacker.example/callback")
 
 
