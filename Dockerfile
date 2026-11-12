@@ -6,6 +6,8 @@ COPY src/backend/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r /app/requirements.txt
 
 COPY src/backend /app
+COPY alembic /app/alembic
+COPY alembic.ini /app/alembic.ini
 
 EXPOSE 8000
 

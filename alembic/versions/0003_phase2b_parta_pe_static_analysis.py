@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "0003_phase2b_parta_pe_static_analysis"
+revision = "0003_pe_static_analysis"
 down_revision = "0002_phase2a_email_intake"
 branch_labels = None
 depends_on = None

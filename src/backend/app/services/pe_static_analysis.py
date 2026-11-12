@@ -300,6 +300,7 @@ def persist_artifact_analysis(
             value=item["value"],
             normalized_value=item["normalized_value"],
             source=item["source"],
+            classification="extracted",
             context=item.get("context", {}),
         )
         artifact.iocs.append(ioc_record)

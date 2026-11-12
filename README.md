@@ -19,9 +19,9 @@ MALCIE is a malware-centric incident investigation and digital forensics platfor
 
 ### Test & Code Quality Status
 
-- **Backend Unit & Integration Tests:** **48 / 48 PASSING** (`pytest tests/backend -q`)
+- **Backend Unit & Integration Tests:** **50 / 50 PASSING** (`pytest tests/backend -q`)
 - **Backend Linting & Formatting:** **PASSING** (`ruff check src/backend/app tests/backend alembic`) with zero errors
-- **Frontend Component Tests:** **PASSING** (`vitest run` in `src/frontend`)
+- **Frontend Component Tests:** **PASSING** (`npm run test` in `src/frontend`)
 
 ---
 
@@ -253,6 +253,60 @@ MALCIE/
 
 ## API Endpoints Reference
 
+## Clean Installation and Configuration
+
+Requirements: Python 3.12+, Node.js 20+, npm, Docker, and Docker Compose.
+
+### Local development (SQLite)
+
+1. Create an environment: `cp .env.example .env`.
+2. Create and activate a virtual environment: `python -m venv .venv` and
+   `source .venv/bin/activate` (Windows: `.venv\Scripts\activate`).
+3. Install backend dependencies: `python -m pip install -r src/backend/requirements.txt`.
+4. Install frontend dependencies: `cd src/frontend && npm ci`.
+5. From `src/backend`, apply migrations with
+   `DATABASE_URL=sqlite:///../../malcie.db alembic upgrade head`.
+6. Start the API from `src/backend` with `uvicorn app.main:app --reload`.
+7. In another terminal, run `cd src/frontend && npm run dev`.
+
+The local defaults use SQLite, `http://localhost:8000` for the API, and
+`http://localhost:3000` for the frontend. Set `API_KEY` and
+`ALLOWED_ORIGINS` before using production mode. Graph and VirusTotal features
+remain disabled until their credentials and redirect/webhook settings are
+configured.
+
+### Docker Compose (PostgreSQL)
+
+1. Copy `.env.example` to `.env`.
+2. Set non-empty `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `API_KEY`.
+3. Start the stack: `docker compose up --build`.
+4. Verify the API with `curl http://localhost:8000/api/v1/health` and open
+   `http://localhost:3000`.
+5. Stop without deleting database data: `docker compose down`.
+6. Remove persisted PostgreSQL data only when intentionally resetting the
+   environment: `docker compose down -v`.
+
+The backend waits for PostgreSQL health, runs `alembic upgrade head` before
+starting, and exposes health checks for Compose. PostgreSQL data is stored in
+the `pgdata` named volume. Do not expose the database port or commit `.env`.
+
+### Verification
+
+From the repository root:
+```bash
+.venv/bin/pytest tests/backend
+.venv/bin/ruff check src/backend/app tests/backend
+cd src/frontend && npm run test -- --run && npm run build && npm run lint
+```
+
+Migration verification against a disposable SQLite database is:
+`DATABASE_URL=sqlite:///./migration-check.db alembic upgrade head`, followed by
+`alembic downgrade base` and a second `alembic upgrade head`. CI repeats the
+same upgrade/downgrade/upgrade sequence against PostgreSQL 15. A live Microsoft
+Graph mailbox and VirusTotal API key are credential-dependent and are not
+claimed by local or CI tests; use a dedicated test tenant and test mailbox for
+those checks.
+
 In `APP_ENV=production`, API routes require the configured `API_KEY` via
 `X-API-Key` or `Authorization: Bearer`. Microsoft Graph webhook validation and
 notifications remain reachable without that application key and are protected
@@ -286,6 +340,7 @@ never source control.
 ### Email & Intake (Phases 2A & 3)
 - `GET /api/v1/emails/graph/auth-url` - Generate Microsoft Graph OAuth authorization URL
 - `POST /api/v1/emails/graph/oauth/token` - Exchange authorization code for token
+- `POST /api/v1/emails/graph/oauth/refresh` - Refresh an expired Graph access token
 - `GET /api/v1/emails/graph/messages` - Query/list mailbox messages via Microsoft Graph
 - `POST /api/v1/emails/graph/poll` - Poll messages from mailbox with optional auto-ingest into incident
 - `POST /api/v1/emails/graph/subscriptions` - Create Microsoft Graph webhook subscription
