@@ -31,6 +31,10 @@ class GraphTokenExchangeRequest(BaseModel):
     state: str
 
 
+class GraphTokenRefreshRequest(BaseModel):
+    refresh_token: str
+
+
 class GraphTokenResponse(BaseModel):
     access_token: str
     token_type: str
@@ -129,6 +133,7 @@ class IOCRecordRead(BaseModel):
     value: str
     normalized_value: str
     source: str
+    classification: str
     context: dict[str, object]
     created_at: datetime
 

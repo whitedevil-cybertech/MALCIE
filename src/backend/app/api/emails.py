@@ -32,6 +32,7 @@ from app.schemas import (
     GraphSubscriptionCreateRequest,
     GraphSubscriptionResponse,
     GraphTokenExchangeRequest,
+    GraphTokenRefreshRequest,
     GraphTokenResponse,
 )
 from app.services.email_intake import (
@@ -138,6 +139,14 @@ def graph_exchange_token(
         state=payload.state,
     )
     return GraphTokenResponse(**token_payload)
+
+
+@router.post("/graph/oauth/refresh", response_model=GraphTokenResponse)
+def graph_refresh_token(
+    payload: GraphTokenRefreshRequest,
+    graph_client: GraphClient = GRAPH_SERVICE,
+) -> GraphTokenResponse:
+    return GraphTokenResponse(**graph_client.refresh_access_token(payload.refresh_token))
 
 
 @router.get("/graph/messages", response_model=list[GraphMessageSummary])
@@ -273,6 +282,10 @@ def _resolve_graph_token(access_token: str | None, authorization: str | None) ->
 async def graph_webhook(
     request: Request,
     validationToken: str | None = Query(None),
+    x_graph_access_token: str | None = Header(default=None),
+    x_malcie_incident_id: int | None = Header(default=None),
+    db: Session = DB_SESSION,
+    graph_client: GraphClient = GRAPH_SERVICE,
 ) -> Response:
     if request.headers.get("content-length"):
         try:
@@ -336,6 +349,24 @@ async def graph_webhook(
             notif.get("resource"),
         )
         processed += 1
+        if x_graph_access_token and x_malcie_incident_id and message_id:
+            try:
+                _get_incident_or_404(db, x_malcie_incident_id)
+                graph_message = graph_client.get_message_eml(
+                    access_token=x_graph_access_token,
+                    message_id=str(message_id),
+                )
+                if graph_message.eml_content:
+                    _persist_email_evidence(
+                        db=db,
+                        incident_id=x_malcie_incident_id,
+                        source="microsoft_graph_webhook",
+                        eml_content=graph_message.eml_content,
+                        original_name=f"{message_id}.eml",
+                        graph_message_id=str(message_id),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Webhook message ingestion failed for %s: %s", message_id, exc)
 
     # Microsoft Graph expects an HTTP 202 Accepted response within 3 seconds
     return Response(

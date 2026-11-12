@@ -7,6 +7,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-malciedb}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB:-malciedb}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   backend:
     build:
@@ -16,10 +21,17 @@ services:
       APP_ENV: ${APP_ENV:-production}
       API_KEY: ${API_KEY:?API_KEY is required}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-malciedb}
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, urllib.request; request=urllib.request.Request('http://localhost:8000/api/v1/health', headers={'X-API-Key': os.environ.get('API_KEY', '')}); urllib.request.urlopen(request)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
   frontend:
     image: node:20-alpine
@@ -28,11 +40,12 @@ services:
     volumes:
       - ./src/frontend:/app
     environment:
-      VITE_API_URL: http://localhost:8000
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   pgdata:

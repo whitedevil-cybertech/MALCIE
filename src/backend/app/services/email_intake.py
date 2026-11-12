@@ -13,7 +13,7 @@ from fastapi import HTTPException, UploadFile, status
 
 from app.core.config import settings
 
-URL_PATTERN = re.compile(r"https?://[^\s<>'\"]+")
+URL_PATTERN = re.compile(r"https?://[^\s<>'\"\\]+", re.IGNORECASE)
 DOMAIN_PATTERN = re.compile(r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b")
 SAFE_FILENAME_PATTERN = re.compile(r"[^a-zA-Z0-9._-]")
 
@@ -75,8 +75,22 @@ def extract_recipients(raw_values: list[str] | None) -> list[str]:
 
 def extract_urls_domains(text: str) -> tuple[list[str], list[str]]:
     urls = sorted({match.rstrip(".,;)") for match in URL_PATTERN.findall(text)})
-    domains = {urlparse(url).hostname.lower() for url in urls if urlparse(url).hostname}
-    domains.update({domain.lower() for domain in DOMAIN_PATTERN.findall(text)})
+    domains: set[str] = set()
+    for url in urls:
+        try:
+            hostname = urlparse(url).hostname
+        except ValueError:
+            hostname = None
+        if hostname:
+            try:
+                domains.add(hostname.encode("idna").decode("ascii").lower().rstrip("."))
+            except UnicodeError:
+                continue
+    for domain in DOMAIN_PATTERN.findall(text):
+        try:
+            domains.add(domain.encode("idna").decode("ascii").lower().rstrip("."))
+        except UnicodeError:
+            continue
     return urls, sorted(domains)
 
 
@@ -111,7 +125,10 @@ def parse_eml_bytes(content: bytes) -> ParsedEmailEvidence:
 
         if part.get_content_type() in {"text/plain", "text/html"}:
             charset = part.get_content_charset() or "utf-8"
-            body_chunks.append(payload.decode(charset, errors="replace"))
+            try:
+                body_chunks.append(payload.decode(charset, errors="replace"))
+            except LookupError:
+                body_chunks.append(payload.decode("utf-8", errors="replace"))
 
     body_text = "\n".join(body_chunks).strip()
     body_preview = body_text[:2000]

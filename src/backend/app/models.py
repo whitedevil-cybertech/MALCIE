@@ -165,6 +165,9 @@ class IOCRecord(Base):
     value: Mapped[str] = mapped_column(Text, nullable=False)
     normalized_value: Mapped[str] = mapped_column(String(1024), nullable=False, index=True)
     source: Mapped[str] = mapped_column(String(100), nullable=False)
+    classification: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="extracted"
+    )
     context: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 

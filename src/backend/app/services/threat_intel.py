@@ -97,6 +97,8 @@ def enrich_single_ioc(
         raw_response=vt_res.raw_response,
         queried_at=vt_res.queried_at,
     )
+    if vt_res.malicious_votes > 0 or vt_res.suspicious_votes > 0:
+        ioc.classification = "intelligence_supported"
     db.add(record)
     db.commit()
     db.refresh(record)

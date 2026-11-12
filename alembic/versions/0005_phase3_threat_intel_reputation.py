@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "0005_phase3_threat_intel_reputation"
-down_revision = "0004_phase2b_partb_yara_ioc"
+revision = "0005_threat_intel"
+down_revision = "0004_yara_ioc"
 branch_labels = None
 depends_on = None
 

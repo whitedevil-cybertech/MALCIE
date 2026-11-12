@@ -7,8 +7,8 @@ Revises: 0006_phase4_correlation_timeline
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0007_phase5_sysmon_telemetry"
-down_revision = "0006_phase4_correlation_timeline"
+revision = "0007_sysmon_telemetry"
+down_revision = "0006_correlation_timeline"
 branch_labels = None
 depends_on = None
 

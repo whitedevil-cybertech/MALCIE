@@ -159,6 +159,37 @@ class GraphClient:
             "refresh_token": token_data.get("refresh_token"),
         }
 
+    def refresh_access_token(self, refresh_token: str) -> dict[str, str | int]:
+        if not refresh_token:
+            raise HTTPException(status_code=400, detail="refresh_token is required")
+        token_url = (
+            f"https://login.microsoftonline.com/{settings.graph_tenant_id}/oauth2/v2.0/token"
+        )
+        response = self._request_with_retry(
+            "POST",
+            token_url,
+            data={
+                "client_id": settings.graph_client_id,
+                "client_secret": settings.graph_client_secret,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "scope": settings.graph_scope,
+            },
+        )
+        if response.status_code >= 400:
+            logger.error("OAuth token refresh failed with status %s", response.status_code)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Failed to refresh Microsoft Graph token",
+            )
+        token_data = response.json()
+        return {
+            "access_token": token_data["access_token"],
+            "token_type": token_data.get("token_type", "Bearer"),
+            "expires_in": int(token_data.get("expires_in", 0)),
+            "refresh_token": token_data.get("refresh_token", refresh_token),
+        }
+
     @staticmethod
     def _allowed_redirect_uris() -> set[str]:
         return {

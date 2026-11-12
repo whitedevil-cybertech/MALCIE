@@ -5,16 +5,14 @@ import ipaddress
 import re
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import SplitResult, urlsplit, urlunsplit
 
-URL_REGEX = re.compile(
-    r"https?://[a-zA-Z0-9][-a-zA-Z0-9@:%._+~#=]{0,256}\b(?:/[^<>\s\"'\\]*)?",
-    re.IGNORECASE,
-)
+URL_REGEX = re.compile(r"https?://[^\s<>\"'\\]+", re.IGNORECASE)
 IPV4_REGEX = re.compile(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b")
 DOMAIN_REGEX = re.compile(
     r"\b[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}\b"
 )
+UNICODE_DOMAIN_REGEX = re.compile(r"(?<![@\w])(?:[^\s./]+\.)+[^\s./]{2,}", re.UNICODE)
 WIN_PATH_REGEX = re.compile(
     r"(?:[a-zA-Z]:\\(?:[^\\/:*?\"<>|\r\n\t]+\\)*[^\\/:*?\"<>|\r\n\t]+|"
     r"%[a-zA-Z0-9_-]+%\\(?:[^\\/:*?\"<>|\r\n\t]+\\)*[^\\/:*?\"<>|\r\n\t]+|"
@@ -117,19 +115,37 @@ def _normalize_url(raw_url: str) -> str | None:
         parsed = urlsplit(cleaned)
         if parsed.scheme.lower() not in {"http", "https"}:
             return None
-        if not parsed.netloc:
+        if not parsed.hostname:
             return None
-        normalized_netloc = parsed.netloc.lower()
+        hostname = parsed.hostname.encode("idna").decode("ascii").lower().rstrip(".")
+        try:
+            port = parsed.port
+        except ValueError:
+            return None
+        if not hostname or any(not label for label in hostname.split(".")):
+            return None
+        netloc = hostname
+        if ":" in hostname and not hostname.startswith("["):
+            netloc = f"[{hostname}]"
+        if port and not (
+            (parsed.scheme.lower() == "http" and port == 80)
+            or (parsed.scheme.lower() == "https" and port == 443)
+        ):
+            netloc = f"{netloc}:{port}"
         normalized_scheme = parsed.scheme.lower()
+        normalized_path = parsed.path or ("/" if parsed.query else "")
         return urlunsplit(
-            (normalized_scheme, normalized_netloc, parsed.path, parsed.query, parsed.fragment)
+            SplitResult(normalized_scheme, netloc, normalized_path, parsed.query, "")
         )
-    except Exception:  # noqa: BLE001
+    except (UnicodeError, ValueError):
         return None
 
 
 def _normalize_domain(raw_domain: str) -> str | None:
-    domain = raw_domain.rstrip(".").lower()
+    try:
+        domain = raw_domain.rstrip(".").encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        return None
     parts = domain.split(".")
     if len(parts) < 2:
         return None
@@ -137,6 +153,8 @@ def _normalize_domain(raw_domain: str) -> str | None:
     if tld in DISALLOWED_DOMAIN_EXTENSIONS:
         return None
     if not tld.isalpha() or len(tld) < 2:
+        return None
+    if any(len(part) > 63 for part in parts):
         return None
     # Reject domains that are purely numeric or resemble an IP address
     if all(part.isdigit() for part in parts):
@@ -207,7 +225,8 @@ def extract_iocs_from_text(
                 )
 
     # 4. Domains
-    found_domains = DOMAIN_REGEX.findall(text)
+    found_domains = set(DOMAIN_REGEX.findall(text))
+    found_domains.update(UNICODE_DOMAIN_REGEX.findall(text))
     for raw_domain in found_domains:
         norm_dom = _normalize_domain(raw_domain)
         if norm_dom:

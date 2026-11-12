@@ -37,8 +37,42 @@ jobs:
         with:
           node-version: "20"
       - name: Install dependencies
-        run: npm install
+        run: npm ci
       - name: Lint
         run: npm run lint
       - name: Test
         run: npm run test
+      - name: Build
+        run: npm run build
+
+  migrations:
+    runs-on: ubuntu-latest
+    needs: backend
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: malcie
+          POSTGRES_PASSWORD: malcie
+          POSTGRES_DB: malciedb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U malcie -d malciedb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: src/backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Upgrade and downgrade migrations
+        env:
+          DATABASE_URL: postgresql+psycopg://malcie:malcie@localhost:5432/malciedb
+        run: alembic upgrade head && alembic downgrade base && alembic upgrade head
