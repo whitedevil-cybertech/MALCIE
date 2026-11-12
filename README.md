@@ -16,6 +16,7 @@ MALCIE is a malware-centric incident investigation and digital forensics platfor
 - **Phase 3: Email & Threat Integration** — COMPLETED & VERIFIED
 - **Phase 4: Correlation & Linkage Engine** — **COMPLETED & VERIFIED**
 - **Phase 5: Endpoint Telemetry Integration** — **COMPLETED & VERIFIED**
+- **Frontend Development & Investigation Interface** — IMPLEMENTED; frontend checks passing
 
 ### Test & Code Quality Status
 
@@ -28,14 +29,25 @@ MALCIE is a malware-centric incident investigation and digital forensics platfor
 The latest implementation was reviewed directly across Graph OAuth/webhooks, IOC and
 VirusTotal processing, Docker startup and health checks, and URL/domain normalization.
 The targeted backend review suite passed **24 tests** and Ruff passed after the review
-fixes. The frontend remains a skeleton; the API-backed implementation sequence is
-documented in `Markdown_Files/Frontend Implementation Plan.md`.
+fixes. The React analyst interface now connects to the verified incident, email,
+artifact analysis, IOC, threat-intelligence, telemetry, correlation, and timeline APIs.
+See `Markdown_Files/Frontend Implementation Plan.md` for route limitations and the
+frontend session record in `Markdown_Files/MEMORY/` for implementation and validation
+details.
 
 The review fixed IPv6 inclusion in batch VirusTotal enrichment, rejected malformed
 Graph webhook notifications, prevented repeated Graph message ingestion within an
 incident, and changed `/api/v1/health` to verify database connectivity. OAuth token
 persistence/rotation and durable webhook receipt state remain unresolved architectural
 items and are not represented as completed functionality.
+
+### Frontend Stabilization — 2026-11-12
+
+The focused frontend stabilization pass passed ESLint, **8 frontend tests**, and the
+production build. The API workflow was exercised against an isolated, migrated SQLite
+backend using synthetic email and attachment evidence. VirusTotal returned its explicit
+`UNCONFIGURED` state because no credential was used. Exact endpoint results and remaining
+limits are in `Markdown_Files/MEMORY/stabilization-session-2026-11-12.md`.
 
 ---
 
@@ -282,6 +294,10 @@ Requirements: Python 3.12+, Node.js 20+, npm, Docker, and Docker Compose.
    `DATABASE_URL=sqlite:///../../malcie.db alembic upgrade head`.
 6. Start the API from `src/backend` with `uvicorn app.main:app --reload`.
 7. In another terminal, run `cd src/frontend && npm run dev`.
+
+Configure `VITE_API_BASE_URL` in the frontend environment (for local development,
+`http://localhost:8000/api/v1`). If the backend runs in production mode, provide its
+API key in the workspace connection form; the key is kept in browser memory only.
 
 The local defaults use SQLite, `http://localhost:8000` for the API, and
 `http://localhost:3000` for the frontend. Set `API_KEY` and

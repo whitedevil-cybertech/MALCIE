@@ -149,6 +149,9 @@ def _normalize_domain(raw_domain: str) -> str | None:
     parts = domain.split(".")
     if len(parts) < 2:
         return None
+    label_pattern = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+    if any(not label_pattern.fullmatch(part) for part in parts):
+        return None
     tld = parts[-1]
     if tld in DISALLOWED_DOMAIN_EXTENSIONS:
         return None

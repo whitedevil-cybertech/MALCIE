@@ -40,6 +40,13 @@ def test_email_domain_normalization_supports_idn_and_rejects_bad_urls() -> None:
     assert "xn--r8jz45g.xn--zckzah" in domains
 
 
+def test_artifact_strings_reject_invalid_dns_labels_as_domains() -> None:
+    iocs = extract_iocs_from_text("`.rdata @.didat @.reloc @.data example.com")
+    domains = {ioc.normalized_value for ioc in iocs if ioc.ioc_type == "domain"}
+
+    assert domains == {"example.com"}
+
+
 def test_ipv6_iocs_are_included_in_batch_enrichment(monkeypatch) -> None:
     class FakeDB:
         def get(self, model, incident_id):
