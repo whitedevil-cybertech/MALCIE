@@ -119,7 +119,7 @@ def enrich_incident_iocs(
     target_types = set(
         [t.lower() for t in ioc_types]
         if ioc_types
-        else ["sha256", "md5", "sha1", "url", "domain", "ipv4"]
+        else ["sha256", "md5", "sha1", "url", "domain", "ipv4", "ipv6"]
     )
 
     eligible_iocs = [
@@ -155,7 +155,7 @@ def enrich_artifact_iocs(
         return []
 
     results: list[ThreatIntelResult] = []
-    target_types = {"sha256", "md5", "sha1", "url", "domain", "ipv4"}
+    target_types = {"sha256", "md5", "sha1", "url", "domain", "ipv4", "ipv6"}
     seen: set[tuple[str, str]] = set()
 
     for ioc in artifact.iocs:

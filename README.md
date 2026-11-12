@@ -19,9 +19,23 @@ MALCIE is a malware-centric incident investigation and digital forensics platfor
 
 ### Test & Code Quality Status
 
-- **Backend Unit & Integration Tests:** **50 / 50 PASSING** (`pytest tests/backend -q`)
+- **Backend Unit & Integration Tests:** **55 / 55 PASSING** (`cd src/backend && pytest ../../tests/backend -q`)
 - **Backend Linting & Formatting:** **PASSING** (`ruff check src/backend/app tests/backend alembic`) with zero errors
 - **Frontend Component Tests:** **PASSING** (`npm run test` in `src/frontend`)
+
+### Independent Technical Review — 2026-11-12
+
+The latest implementation was reviewed directly across Graph OAuth/webhooks, IOC and
+VirusTotal processing, Docker startup and health checks, and URL/domain normalization.
+The targeted backend review suite passed **24 tests** and Ruff passed after the review
+fixes. The frontend remains a skeleton; the API-backed implementation sequence is
+documented in `Markdown_Files/Frontend Implementation Plan.md`.
+
+The review fixed IPv6 inclusion in batch VirusTotal enrichment, rejected malformed
+Graph webhook notifications, prevented repeated Graph message ingestion within an
+incident, and changed `/api/v1/health` to verify database connectivity. OAuth token
+persistence/rotation and durable webhook receipt state remain unresolved architectural
+items and are not represented as completed functionality.
 
 ---
 
