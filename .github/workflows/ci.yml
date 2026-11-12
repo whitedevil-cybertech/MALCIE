@@ -75,4 +75,4 @@ jobs:
       - name: Upgrade and downgrade migrations
         env:
           DATABASE_URL: postgresql+psycopg://malcie:malcie@localhost:5432/malciedb
-        run: alembic upgrade head && alembic downgrade base && alembic upgrade head
+        run: cd ../.. && alembic upgrade head && alembic downgrade base && alembic upgrade head
