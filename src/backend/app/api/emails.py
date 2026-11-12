@@ -17,6 +17,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -117,6 +118,22 @@ def _persist_email_evidence(
     return email_record
 
 
+def _email_already_ingested(
+    db: Session,
+    incident_id: int,
+    graph_message_id: str,
+) -> bool:
+    return (
+        db.execute(
+            select(EmailEvidence.id).where(
+                EmailEvidence.incident_id == incident_id,
+                EmailEvidence.graph_message_id == graph_message_id,
+            )
+        ).scalar_one_or_none()
+        is not None
+    )
+
+
 @router.get("/graph/auth-url", response_model=GraphAuthUrlResponse)
 def graph_auth_url(
     redirect_uri: str,
@@ -201,6 +218,8 @@ def poll_graph_messages(
                     message_id=msg_id,
                 )
                 if graph_msg.eml_content:
+                    if _email_already_ingested(db, payload.incident_id, msg_id):
+                        continue
                     email_rec = _persist_email_evidence(
                         db=db,
                         incident_id=payload.incident_id,
@@ -339,9 +358,17 @@ async def graph_webhook(
             logger.warning("Rejected webhook notification with mismatched clientState")
             continue
 
-        resource_data = notif.get("resourceData", {})
-        message_id = resource_data.get("id")
+        resource_data = notif.get("resourceData")
+        message_id = resource_data.get("id") if isinstance(resource_data, dict) else None
         change_type = notif.get("changeType")
+        if (
+            not isinstance(notif.get("subscriptionId"), str)
+            or not isinstance(notif.get("resource"), str)
+            or not isinstance(message_id, str)
+            or change_type not in {"created", "updated", "deleted"}
+        ):
+            logger.warning("Rejected webhook notification with invalid Graph fields")
+            continue
         logger.info(
             "Received Graph notification: type=%s, message_id=%s, resource=%s",
             change_type,
@@ -352,6 +379,8 @@ async def graph_webhook(
         if x_graph_access_token and x_malcie_incident_id and message_id:
             try:
                 _get_incident_or_404(db, x_malcie_incident_id)
+                if _email_already_ingested(db, x_malcie_incident_id, str(message_id)):
+                    continue
                 graph_message = graph_client.get_message_eml(
                     access_token=x_graph_access_token,
                     message_id=str(message_id),

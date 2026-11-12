@@ -95,6 +95,24 @@ def test_production_graph_webhook_requires_client_state(client, monkeypatch) -> 
     assert response.status_code == 503
 
 
+def test_graph_webhook_rejects_malformed_notifications(client, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "graph_webhook_client_state", "test-webhook-secret")
+    response = client.post(
+        "/api/v1/emails/graph/webhook",
+        json={
+            "value": [
+                {
+                    "clientState": "test-webhook-secret",
+                    "changeType": "created",
+                    "resourceData": {"id": "message-1"},
+                }
+            ]
+        },
+    )
+    assert response.status_code == 202
+    assert response.json()["processed_notifications"] == 0
+
+
 def test_artifact_analysis_rejects_modified_evidence(tmp_path: Path, monkeypatch) -> None:
     content = b"original evidence"
     path = tmp_path / "artifact.bin"
