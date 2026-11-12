@@ -3,9 +3,9 @@ from __future__ import annotations
 from email.message import EmailMessage
 
 from app.core.config import settings
+from app.services import threat_intel
 from app.services.email_intake import extract_urls_domains, parse_eml_bytes
 from app.services.ioc_extraction import extract_iocs_from_text
-from app.services import threat_intel
 
 
 def test_url_normalization_removes_fragments_default_ports_and_encodes_idn() -> None:
