@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import app.models  # noqa: F401
 from app.api.artifacts import router as artifacts_router
+from app.api.auth import router as auth_router
 from app.api.emails import router as emails_router
 from app.api.health import router as health_router
 from app.api.incidents import router as incidents_router
@@ -28,6 +29,7 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-API-Key"],
 )
 app.include_router(health_router, prefix=settings.api_v1_prefix)
+app.include_router(auth_router, prefix=settings.api_v1_prefix, dependencies=[])
 app.include_router(incidents_router, prefix=settings.api_v1_prefix)
 app.include_router(emails_router, prefix=settings.api_v1_prefix)
 app.include_router(artifacts_router, prefix=settings.api_v1_prefix)

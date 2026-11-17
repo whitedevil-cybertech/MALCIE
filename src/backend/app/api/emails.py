@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import (
@@ -21,8 +21,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.security import (
+    AuthenticatedUser,
+    ensure_incident_access,
+    get_current_user,
+    require_role,
+)
 from app.db import get_db
-from app.models import Artifact, EmailEvidence, Incident
+from app.models import Artifact, EmailEvidence, GraphOAuthToken, Incident, WebhookDelivery
 from app.schemas import (
     EmailEvidenceRead,
     GraphAuthUrlResponse,
@@ -43,19 +49,21 @@ from app.services.email_intake import (
     validate_eml_upload,
 )
 from app.services.graph_client import GraphClient, get_graph_client
+from app.services.token_crypto import encrypt_token
 
 logger = logging.getLogger(__name__)
-_seen_webhook_ids: dict[str, float] = {}
-
 router = APIRouter(prefix="/emails", tags=["emails"])
 DB_SESSION = Depends(get_db)
 GRAPH_SERVICE = Depends(get_graph_client)
 
 
-def _get_incident_or_404(db: Session, incident_id: int) -> Incident:
+def _get_incident_or_404(
+    db: Session, incident_id: int, user: AuthenticatedUser | None = None
+) -> Incident:
     incident = db.get(Incident, incident_id)
     if incident is None:
         raise HTTPException(status_code=404, detail="Incident not found")
+    ensure_incident_access(incident, user)
     return incident
 
 
@@ -125,10 +133,7 @@ def _email_already_ingested(
 ) -> bool:
     return (
         db.execute(
-            select(EmailEvidence.id).where(
-                EmailEvidence.incident_id == incident_id,
-                EmailEvidence.graph_message_id == graph_message_id,
-            )
+            select(EmailEvidence.id).where(EmailEvidence.graph_message_id == graph_message_id)
         ).scalar_one_or_none()
         is not None
     )
@@ -137,6 +142,7 @@ def _email_already_ingested(
 @router.get("/graph/auth-url", response_model=GraphAuthUrlResponse)
 def graph_auth_url(
     redirect_uri: str,
+    user: AuthenticatedUser | None = Depends(get_current_user),
     graph_client: GraphClient = GRAPH_SERVICE,
 ) -> GraphAuthUrlResponse:
     if not redirect_uri:
@@ -148,6 +154,8 @@ def graph_auth_url(
 @router.post("/graph/oauth/token", response_model=GraphTokenResponse)
 def graph_exchange_token(
     payload: GraphTokenExchangeRequest,
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
     graph_client: GraphClient = GRAPH_SERVICE,
 ) -> GraphTokenResponse:
     token_payload = graph_client.exchange_code_for_token(
@@ -155,15 +163,80 @@ def graph_exchange_token(
         redirect_uri=payload.redirect_uri,
         state=payload.state,
     )
-    return GraphTokenResponse(**token_payload)
+    response = GraphTokenResponse(**token_payload)
+    if user and user.id is not None:
+        token = GraphOAuthToken(
+            user_id=user.id,
+            access_token_encrypted=encrypt_token(str(token_payload["access_token"])),
+            refresh_token_encrypted=(
+                encrypt_token(str(token_payload["refresh_token"]))
+                if token_payload.get("refresh_token")
+                else None
+            ),
+            token_type=str(token_payload.get("token_type", "Bearer")),
+        )
+        expires_in = int(token_payload.get("expires_in", 0))
+        token.expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=expires_in) if expires_in else None
+        )
+        db.add(token)
+        db.commit()
+        db.refresh(token)
+        response.token_id = token.id
+    return response
 
 
 @router.post("/graph/oauth/refresh", response_model=GraphTokenResponse)
 def graph_refresh_token(
     payload: GraphTokenRefreshRequest,
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
     graph_client: GraphClient = GRAPH_SERVICE,
 ) -> GraphTokenResponse:
-    return GraphTokenResponse(**graph_client.refresh_access_token(payload.refresh_token))
+    token_payload = graph_client.refresh_access_token(payload.refresh_token)
+    response = GraphTokenResponse(**token_payload)
+    if user and user.id is not None:
+        old = db.scalar(
+            select(GraphOAuthToken)
+            .where(
+                GraphOAuthToken.user_id == user.id,
+                GraphOAuthToken.revoked_at.is_(None),
+            )
+            .order_by(GraphOAuthToken.created_at.desc())
+        )
+        new = GraphOAuthToken(
+            user_id=user.id,
+            access_token_encrypted=encrypt_token(str(token_payload["access_token"])),
+            refresh_token_encrypted=encrypt_token(str(token_payload["refresh_token"])),
+            token_type=str(token_payload.get("token_type", "Bearer")),
+            expires_at=datetime.now(timezone.utc)
+            + timedelta(seconds=int(token_payload.get("expires_in", 0))),
+        )
+        db.add(new)
+        db.flush()
+        if old:
+            old.revoked_at = datetime.now(timezone.utc)
+            old.replaced_by_id = new.id
+        db.commit()
+        db.refresh(new)
+        response.token_id = new.id
+    return response
+
+
+@router.delete("/graph/oauth/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_graph_token(
+    token_id: int,
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
+) -> Response:
+    if user is None or user.id is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    token = db.get(GraphOAuthToken, token_id)
+    if token is None or (token.user_id != user.id and user.role != "admin"):
+        raise HTTPException(status_code=404, detail="Graph token not found")
+    token.revoked_at = datetime.now(timezone.utc)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/graph/messages", response_model=list[GraphMessageSummary])
@@ -341,18 +414,14 @@ async def graph_webhook(
         if not isinstance(notif, dict):
             continue
         notification_id = notif.get("id")
-        now = time.time()
         if notification_id:
-            _seen_webhook_ids.update(
-                {
-                    key: timestamp
-                    for key, timestamp in _seen_webhook_ids.items()
-                    if now - timestamp < 600
-                }
-            )
-            if notification_id in _seen_webhook_ids:
+            delivery = WebhookDelivery(notification_id=str(notification_id))
+            try:
+                with db.begin_nested():
+                    db.add(delivery)
+                    db.flush()
+            except Exception:
                 continue
-            _seen_webhook_ids[notification_id] = now
         client_state = notif.get("clientState")
         if expected_client_state and client_state != expected_client_state:
             logger.warning("Rejected webhook notification with mismatched clientState")
@@ -410,8 +479,9 @@ def upload_eml(
     incident_id: int = Form(...),  # noqa: B008
     eml_file: UploadFile = File(...),  # noqa: B008
     db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(require_role("analyst")),
 ) -> EmailEvidence:
-    _get_incident_or_404(db, incident_id)
+    _get_incident_or_404(db, incident_id, user)
     eml_content = eml_file.file.read()
     validate_eml_upload(eml_file, eml_content)
     return _persist_email_evidence(
@@ -433,14 +503,17 @@ def ingest_graph_message(
     payload: GraphEmailIngestRequest,
     db: Session = DB_SESSION,
     graph_client: GraphClient = GRAPH_SERVICE,
+    user: AuthenticatedUser | None = Depends(require_role("analyst")),
 ) -> EmailEvidence:
-    _get_incident_or_404(db, payload.incident_id)
+    _get_incident_or_404(db, payload.incident_id, user)
     graph_message = graph_client.get_message_eml(
         access_token=payload.access_token,
         message_id=message_id,
     )
     if not graph_message.eml_content:
         raise HTTPException(status_code=400, detail="Retrieved message is empty")
+    if db.scalar(select(EmailEvidence.id).where(EmailEvidence.graph_message_id == message_id)):
+        raise HTTPException(status_code=409, detail="Graph message has already been ingested")
     return _persist_email_evidence(
         db=db,
         incident_id=payload.incident_id,
@@ -452,8 +525,13 @@ def ingest_graph_message(
 
 
 @router.get("/{email_id}", response_model=EmailEvidenceRead)
-def get_email(email_id: int, db: Session = DB_SESSION) -> EmailEvidence:
+def get_email(
+    email_id: int,
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
+) -> EmailEvidence:
     email_record = db.get(EmailEvidence, email_id)
     if email_record is None:
         raise HTTPException(status_code=404, detail="Email evidence not found")
+    ensure_incident_access(email_record.incident, user)
     return email_record

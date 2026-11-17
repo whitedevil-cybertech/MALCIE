@@ -116,3 +116,42 @@ identity/RBAC and incident authorization, verify PostgreSQL migrations and
 concurrent transactions against the deployed database, harden webhook ingress,
 address email deduplication/orphan cleanup, and perform deployment-level
 secret, storage-permission, backup, monitoring, and rate-limit validation.
+
+## Identity and Graph security implementation
+
+The follow-up implementation adds:
+
+- `src/backend/app/api/auth.py` with registration, login, and current-user
+  endpoints using PBKDF2 password hashes and signed expiring access tokens.
+- `User`, incident `owner_id`, `GraphOAuthToken`, and `WebhookDelivery`
+  models in `src/backend/app/models.py`.
+- Alembic revision
+  `alembic/versions/0009_identity_graph_security.py`, including database
+  uniqueness constraints for Graph message IDs and webhook notification IDs.
+- `src/backend/app/services/token_crypto.py`, which encrypts Graph access and
+  refresh tokens with AES-GCM and fails closed when the production encryption
+  key is absent.
+- Incident ownership checks, role checks, and server-side incident
+  search/status filtering/pagination in `src/backend/app/api/incidents.py`.
+- Durable webhook receipt handling and refresh-token replacement/revocation in
+  `src/backend/app/api/emails.py`.
+- Frontend bearer-token login, role-aware incident creation, incident search,
+  filtering, pagination, reload restoration, Microsoft Graph authorization
+  initiation/callback exchange, and evidence-link navigation in
+  `src/frontend/src/App.tsx` and `src/frontend/src/api.ts`.
+
+Validation after the implementation:
+
+- `cd src/backend && ruff check app ../../tests/backend` — passed.
+- `cd src/backend && pytest ../../tests/backend` — **58 passed**, one existing
+  Starlette deprecation warning.
+- `cd src/frontend && npm run build` — passed.
+- `cd src/frontend && npm run lint` — passed.
+- `cd src/frontend && npm test -- --run` — **8 passed**.
+
+Remaining deployment limitations are live Microsoft Graph tenant consent,
+multi-worker PostgreSQL concurrency validation, key management/rotation
+operations, and browser-level OAuth testing against a real tenant. The
+development compatibility path still permits unauthenticated requests outside
+production; production deployments require bearer identity and must configure
+`AUTH_SECRET`/`JWT_SECRET` and `OAUTH_ENCRYPTION_KEY`.

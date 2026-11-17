@@ -22,6 +22,22 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="analyst")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    incidents: Mapped[list[Incident]] = relationship(back_populates="owner")
+    graph_tokens: Mapped[list[GraphOAuthToken]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
 class Incident(Base):
     __tablename__ = "incidents"
 
@@ -30,6 +46,11 @@ class Incident(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="new", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    owner_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    owner: Mapped[User | None] = relationship(back_populates="incidents")
 
     emails: Mapped[list[EmailEvidence]] = relationship(
         back_populates="incident", cascade="all, delete-orphan"
@@ -56,6 +77,9 @@ class Incident(Base):
 
 class EmailEvidence(Base):
     __tablename__ = "emails"
+    __table_args__ = (
+        UniqueConstraint("graph_message_id", name="uq_emails_graph_message_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id", ondelete="CASCADE"))
@@ -78,6 +102,35 @@ class EmailEvidence(Base):
     artifacts: Mapped[list[Artifact]] = relationship(
         back_populates="email", cascade="all, delete-orphan"
     )
+
+
+class GraphOAuthToken(Base):
+    __tablename__ = "graph_oauth_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    access_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_type: Mapped[str] = mapped_column(String(32), default="Bearer", nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    replaced_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("graph_oauth_tokens.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    user: Mapped[User] = relationship(back_populates="graph_tokens")
+
+
+class WebhookDelivery(Base):
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (
+        UniqueConstraint("notification_id", name="uq_webhook_deliveries_notification_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    notification_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class Artifact(Base):

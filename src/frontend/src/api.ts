@@ -1,6 +1,8 @@
 const configuredBase = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export type Incident = { id: number; title: string; description: string | null; status: string; created_at: string };
+export type User = { id: number; email: string; role: "admin" | "analyst" | "viewer"; is_active: boolean };
+export type IncidentPage = { items: Incident[]; total: number; page: number; page_size: number; pages: number };
 export type Artifact = { id: number; filename: string; content_type: string | null; size: number; sha256: string };
 export type EmailEvidence = {
   id: number; incident_id: number; source: string; sender: string | null; recipients: string[];
@@ -18,11 +20,11 @@ export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); this.name = "ApiError"; }
 }
 
-export function createApi(base = configuredBase, apiKey = "") {
+export function createApi(base = configuredBase, bearerToken = "") {
   const root = base.replace(/\/+$/, "");
   async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
-    if (apiKey) headers.set("X-API-Key", apiKey);
+    if (bearerToken) headers.set("Authorization", `Bearer ${bearerToken}`);
     if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
     let response: Response;
     try { response = await fetch(`${root}${path}`, { ...init, headers }); }
@@ -43,6 +45,24 @@ export function createApi(base = configuredBase, apiKey = "") {
   }
   return {
     health: () => request<{ status: string; service: string }>("/health"),
+    login: (payload: { email: string; password: string }) =>
+      request<{ access_token: string; token_type: string; user: User }>("/auth/login", { method: "POST", body: JSON.stringify(payload) }),
+    me: () => request<User>("/auth/me"),
+    graphAuthUrl: (redirectUri: string) =>
+      request<{ auth_url: string; state: string }>(`/emails/graph/auth-url?redirect_uri=${encodeURIComponent(redirectUri)}`),
+    exchangeGraphCode: (payload: { code: string; redirect_uri: string; state: string }) =>
+      request<{ access_token: string; token_type: string; expires_in: number; refresh_token?: string; token_id?: number }>(
+        "/emails/graph/oauth/token",
+        { method: "POST", body: JSON.stringify(payload) },
+      ),
+    listIncidents: (params: { search?: string; status?: string; page?: number; page_size?: number } = {}) => {
+      const query = new URLSearchParams();
+      if (params.search) query.set("search", params.search);
+      if (params.status) query.set("status", params.status);
+      query.set("page", String(params.page ?? 1));
+      query.set("page_size", String(params.page_size ?? 10));
+      return request<IncidentPage>(`/incidents?${query.toString()}`);
+    },
     createIncident: (payload: { title: string; description: string }) => request<Incident>("/incidents", { method: "POST", body: JSON.stringify(payload) }),
     getIncident: (id: number) => request<Incident>(`/incidents/${id}`),
     uploadEmail: (incidentId: number, file: File) => { const data = new FormData(); data.set("incident_id", String(incidentId)); data.set("eml_file", file); return request<EmailEvidence>("/emails/upload-eml", { method: "POST", body: data }); },

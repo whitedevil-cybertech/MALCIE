@@ -10,6 +10,33 @@ class IncidentCreate(BaseModel):
     description: str | None = None
 
 
+class UserRegister(BaseModel):
+    email: str
+    password: str
+    role: str = "analyst"
+
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+
+class UserRead(BaseModel):
+    id: int
+    email: str
+    role: str
+    is_active: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "Bearer"
+    user: UserRead
+
+
 class IncidentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -18,6 +45,15 @@ class IncidentRead(BaseModel):
     description: str | None
     status: str
     created_at: datetime
+    owner_id: int | None = None
+
+
+class IncidentListResponse(BaseModel):
+    items: list[IncidentRead]
+    total: int
+    page: int
+    page_size: int
+    pages: int
 
 
 class GraphAuthUrlResponse(BaseModel):
@@ -40,6 +76,7 @@ class GraphTokenResponse(BaseModel):
     token_type: str
     expires_in: int
     refresh_token: str | None = None
+    token_id: int | None = None
 
 
 class GraphEmailIngestRequest(BaseModel):

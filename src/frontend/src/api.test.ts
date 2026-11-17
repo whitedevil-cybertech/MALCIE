@@ -4,7 +4,7 @@ import { ApiError, createApi } from "./api";
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("MALCIE API client", () => {
-  it("sends the configured API key and parses health responses", async () => {
+  it("sends the configured bearer token and parses health responses", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "ok", service: "malcie-api" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const client = createApi("https://malcie.example/api/v1", "session-key");
@@ -12,7 +12,7 @@ describe("MALCIE API client", () => {
     await expect(client.health()).resolves.toEqual({ status: "ok", service: "malcie-api" });
     expect(fetchMock).toHaveBeenCalledWith("https://malcie.example/api/v1/health", expect.objectContaining({ headers: expect.any(Headers) }));
     const requestHeaders = fetchMock.mock.calls[0][1].headers as Headers;
-    expect(requestHeaders.get("X-API-Key")).toBe("session-key");
+    expect(requestHeaders.get("Authorization")).toBe("Bearer session-key");
   });
 
   it("surfaces unauthorized responses without exposing response internals", async () => {
