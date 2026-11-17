@@ -1,6 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.security import (
+    AuthenticatedUser,
+    ensure_incident_access,
+    get_current_user,
+    require_role,
+)
 from app.db import get_db
 from app.models import Artifact
 from app.schemas import ArtifactAnalysisRead, IOCRecordRead
@@ -11,10 +17,15 @@ DB_SESSION = Depends(get_db)
 
 
 @router.post("/{artifact_id}/analyze-static", response_model=ArtifactAnalysisRead)
-def analyze_static_artifact(artifact_id: int, db: Session = DB_SESSION):
+def analyze_static_artifact(
+    artifact_id: int,
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(require_role("analyst")),
+):
     artifact = db.get(Artifact, artifact_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
+    ensure_incident_access(artifact.incident, user)
 
     analysis = analyze_artifact(artifact)
     record = persist_artifact_analysis(artifact=artifact, analysis=analysis)
@@ -27,10 +38,15 @@ def analyze_static_artifact(artifact_id: int, db: Session = DB_SESSION):
 
 
 @router.get("/{artifact_id}/analysis-static", response_model=ArtifactAnalysisRead)
-def get_static_analysis(artifact_id: int, db: Session = DB_SESSION):
+def get_static_analysis(
+    artifact_id: int,
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
+):
     artifact = db.get(Artifact, artifact_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
+    ensure_incident_access(artifact.incident, user)
     if artifact.analysis is None:
         raise HTTPException(status_code=404, detail="Static analysis not found")
     artifact.analysis.iocs = artifact.iocs
@@ -38,9 +54,14 @@ def get_static_analysis(artifact_id: int, db: Session = DB_SESSION):
 
 
 @router.get("/{artifact_id}/iocs", response_model=list[IOCRecordRead])
-def get_artifact_iocs(artifact_id: int, db: Session = DB_SESSION):
+def get_artifact_iocs(
+    artifact_id: int,
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
+):
     artifact = db.get(Artifact, artifact_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
+    ensure_incident_access(artifact.incident, user)
     return artifact.iocs
 

@@ -7,6 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.security import (
+    AuthenticatedUser,
+    ensure_incident_access,
+    get_current_user,
+    require_role,
+)
 from app.db import get_db
 from app.models import Artifact, Incident, ThreatIntelResult
 from app.schemas import (
@@ -30,23 +36,29 @@ DB_SESSION = Depends(get_db)
 VT_SERVICE = Depends(get_virustotal_client)
 
 
-def _get_incident_or_404(db: Session, incident_id: int) -> Incident:
+def _get_incident_or_404(
+    db: Session, incident_id: int, user: AuthenticatedUser | None = None
+) -> Incident:
     incident = db.get(Incident, incident_id)
     if incident is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Incident not found",
         )
+    ensure_incident_access(incident, user)
     return incident
 
 
-def _get_artifact_or_404(db: Session, artifact_id: int) -> Artifact:
+def _get_artifact_or_404(
+    db: Session, artifact_id: int, user: AuthenticatedUser | None = None
+) -> Artifact:
     artifact = db.get(Artifact, artifact_id)
     if artifact is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Artifact not found",
         )
+    ensure_incident_access(artifact.incident, user)
     return artifact
 
 
@@ -60,8 +72,9 @@ def enrich_incident(
     payload: IncidentEnrichRequest | None = None,
     db: Session = DB_SESSION,
     vt_client: VirusTotalClient = VT_SERVICE,
+    user: AuthenticatedUser | None = Depends(require_role("analyst")),
 ) -> Sequence[ThreatIntelResult]:
-    _get_incident_or_404(db, incident_id)
+    _get_incident_or_404(db, incident_id, user)
     ioc_types = payload.ioc_types if payload else None
     results = enrich_incident_iocs(
         db=db,
@@ -79,8 +92,9 @@ def enrich_incident(
 def get_incident_threat_intel(
     incident_id: int,
     db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
 ) -> Sequence[ThreatIntelResult]:
-    _get_incident_or_404(db, incident_id)
+    _get_incident_or_404(db, incident_id, user)
     stmt = (
         select(ThreatIntelResult)
         .where(ThreatIntelResult.incident_id == incident_id)
@@ -98,8 +112,9 @@ def enrich_artifact(
     artifact_id: int,
     db: Session = DB_SESSION,
     vt_client: VirusTotalClient = VT_SERVICE,
+    user: AuthenticatedUser | None = Depends(require_role("analyst")),
 ) -> Sequence[ThreatIntelResult]:
-    _get_artifact_or_404(db, artifact_id)
+    _get_artifact_or_404(db, artifact_id, user)
     results = enrich_artifact_iocs(
         db=db,
         artifact_id=artifact_id,
@@ -115,8 +130,9 @@ def enrich_artifact(
 def get_artifact_threat_intel(
     artifact_id: int,
     db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
 ) -> Sequence[ThreatIntelResult]:
-    _get_artifact_or_404(db, artifact_id)
+    _get_artifact_or_404(db, artifact_id, user)
     stmt = (
         select(ThreatIntelResult)
         .where(ThreatIntelResult.artifact_id == artifact_id)

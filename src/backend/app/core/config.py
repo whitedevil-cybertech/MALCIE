@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
     database_url: str = "sqlite:///./malcie.db"
     api_key: str = ""
+    auth_secret: str = ""
+    jwt_secret: str = ""
+    oauth_encryption_key: str = ""
     allowed_origins: str = "http://localhost:3000"
     graph_redirect_uris: str = ""
 

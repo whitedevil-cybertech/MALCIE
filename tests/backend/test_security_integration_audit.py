@@ -54,11 +54,18 @@ def test_sysmon_rejects_oversized_payload(client, monkeypatch) -> None:
     assert "size limit" in response.json()["detail"]
 
 
-def test_production_api_requires_configured_key(client, monkeypatch) -> None:
+def test_production_api_requires_user_identity(client, monkeypatch) -> None:
     monkeypatch.setattr(settings, "app_env", "production")
     monkeypatch.setattr(settings, "api_key", "test-api-key")
     unauthenticated = client.get("/api/v1/health")
-    authenticated = client.get("/api/v1/health", headers={"X-API-Key": "test-api-key"})
+    registered = client.post(
+        "/api/v1/auth/register",
+        json={"email": "health@example.test", "password": "correct horse battery"},
+    )
+    authenticated = client.get(
+        "/api/v1/health",
+        headers={"Authorization": f"Bearer {registered.json()['access_token']}"},
+    )
     assert unauthenticated.status_code == 401
     assert authenticated.status_code == 200
 

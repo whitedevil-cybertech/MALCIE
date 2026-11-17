@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.security import AuthenticatedUser, get_current_user, require_role
 from app.db import get_db
 from app.models import EndpointEvent, Incident
 from app.schemas import (
@@ -12,6 +14,7 @@ from app.schemas import (
     CorrelationResponse,
     EndpointEventRead,
     IncidentCreate,
+    IncidentListResponse,
     IncidentRead,
     IOCRecordRead,
     LinkageItem,
@@ -27,42 +30,104 @@ router = APIRouter(prefix="/incidents", tags=["incidents"])
 DB_SESSION = Depends(get_db)
 
 
-def _get_incident_or_404(db: Session, incident_id: int) -> Incident:
+def _get_incident_or_404(
+    db: Session, incident_id: int, user: AuthenticatedUser | None = None
+) -> Incident:
     incident = db.get(Incident, incident_id)
     if incident is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
+    if user and user.id is not None and user.role != "admin" and incident.owner_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Incident access denied")
     return incident
 
 
 @router.post("", response_model=IncidentRead)
-def create_incident(payload: IncidentCreate, db: Session = DB_SESSION) -> Incident:
-    incident = Incident(title=payload.title, description=payload.description)
+def create_incident(
+    payload: IncidentCreate,
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(require_role("analyst")),
+) -> Incident:
+    incident = Incident(
+        title=payload.title, description=payload.description, owner_id=user.id if user else None
+    )
     db.add(incident)
     db.commit()
     db.refresh(incident)
     return incident
 
 
+@router.get("", response_model=IncidentListResponse)
+def list_incidents(
+    search: str | None = Query(None, max_length=255),
+    status_filter: str | None = Query(None, alias="status", max_length=50),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
+) -> IncidentListResponse:
+    query = select(Incident)
+    count_query = select(func.count()).select_from(Incident)
+    if user and user.id is not None and user.role != "admin":
+        query = query.where(Incident.owner_id == user.id)
+        count_query = count_query.where(Incident.owner_id == user.id)
+    if search:
+        pattern = f"%{search.strip()}%"
+        predicate = or_(Incident.title.ilike(pattern), Incident.description.ilike(pattern))
+        query = query.where(predicate)
+        count_query = count_query.where(predicate)
+    if status_filter:
+        query = query.where(Incident.status == status_filter)
+        count_query = count_query.where(Incident.status == status_filter)
+    total = db.scalar(count_query) or 0
+    items = list(
+        db.scalars(
+            query.order_by(Incident.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    )
+    pages = (total + page_size - 1) // page_size
+    return IncidentListResponse(
+        items=items, total=total, page=page, page_size=page_size, pages=pages
+    )
+
+
 @router.get("/{incident_id}", response_model=IncidentRead)
-def get_incident(incident_id: int, db: Session = DB_SESSION) -> Incident:
-    return _get_incident_or_404(db, incident_id)
+def get_incident(
+    incident_id: int,
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
+) -> Incident:
+    return _get_incident_or_404(db, incident_id, user)
 
 
 @router.get("/{incident_id}/iocs", response_model=list[IOCRecordRead])
-def get_incident_iocs(incident_id: int, db: Session = DB_SESSION) -> list[IOCRecordRead]:
-    incident = _get_incident_or_404(db, incident_id)
+def get_incident_iocs(
+    incident_id: int,
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
+) -> list[IOCRecordRead]:
+    incident = _get_incident_or_404(db, incident_id, user)
     return incident.iocs
 
 
 @router.post("/{incident_id}/correlate", response_model=CorrelationResponse)
-def correlate_incident(incident_id: int, db: Session = DB_SESSION) -> CorrelationResponse:
-    _get_incident_or_404(db, incident_id)
+def correlate_incident(
+    incident_id: int,
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(require_role("analyst")),
+) -> CorrelationResponse:
+    _get_incident_or_404(db, incident_id, user)
     return run_incident_correlation(db=db, incident_id=incident_id)
 
 
 @router.get("/{incident_id}/correlations", response_model=CorrelationResponse)
-def get_incident_correlations(incident_id: int, db: Session = DB_SESSION) -> CorrelationResponse:
-    incident = _get_incident_or_404(db, incident_id)
+def get_incident_correlations(
+    incident_id: int,
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
+) -> CorrelationResponse:
+    incident = _get_incident_or_404(db, incident_id, user)
     corr = incident.correlation_result
     if corr is None:
         return run_incident_correlation(db=db, incident_id=incident_id)
@@ -89,8 +154,9 @@ def get_incident_correlations(incident_id: int, db: Session = DB_SESSION) -> Cor
 def get_incident_timeline(
     incident_id: int,
     db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
 ) -> Sequence[TimelineEventRead]:
-    _get_incident_or_404(db, incident_id)
+    _get_incident_or_404(db, incident_id, user)
     events = get_incident_timeline_events(db=db, incident_id=incident_id)
     return [
         TimelineEventRead(
@@ -113,8 +179,9 @@ def get_incident_timeline(
 def get_incident_endpoint_telemetry(
     incident_id: int,
     db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
 ) -> list[EndpointEvent]:
-    _get_incident_or_404(db, incident_id)
+    _get_incident_or_404(db, incident_id, user)
     return list(
         db.query(EndpointEvent)
         .filter(EndpointEvent.incident_id == incident_id)
