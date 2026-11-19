@@ -50,7 +50,7 @@ def test_sysmon_rejects_oversized_payload(client, monkeypatch) -> None:
         content=json.dumps({"EventID": 1}),
         headers={"content-type": "application/json"},
     )
-    assert response.status_code == 400
+    assert response.status_code == 413
     assert "size limit" in response.json()["detail"]
 
 

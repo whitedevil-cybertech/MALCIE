@@ -257,7 +257,7 @@ def build_evidence_linkages(incident: Incident) -> list[LinkageItem]:
             )
 
             # YARA Matches
-            for match in analysis.yara_matches:
+            for match in analysis.yara_matches or []:
                 rule_name = str(match.get("rule", "UnknownRule"))
                 desc = f"YARA rule '{rule_name}' matched on '{artifact.filename}'"
                 linkages.append(
@@ -802,7 +802,7 @@ def compute_incident_risk(incident: Incident) -> RiskAssessment:
     scored_entropy_artifacts: set[int] = set()
     for art in incident.artifacts:
         if art.analysis and art.analysis.is_pe and art.id not in scored_entropy_artifacts:
-            for section in art.analysis.sections:
+            for section in art.analysis.sections or []:
                 entropy = float(section.get("entropy", 0.0))
                 sec_name = str(section.get("name", "unknown"))
                 if entropy > 7.0:
@@ -829,7 +829,7 @@ def compute_incident_risk(incident: Incident) -> RiskAssessment:
     for art in incident.artifacts:
         if art.analysis and art.analysis.imports and art.id not in scored_import_artifacts:
             found_apis: list[str] = []
-            for imp in art.analysis.imports:
+            for imp in art.analysis.imports or []:
                 funcs = imp.get("functions", [])
                 if isinstance(funcs, list):
                     for fn in funcs:
@@ -1070,7 +1070,7 @@ def generate_incident_timeline(incident: Incident) -> list[TimelineEvent]:
 
         analysis = art.analysis
         if analysis:
-            time_stamp_val = analysis.pe_headers.get("time_date_stamp")
+            time_stamp_val = (analysis.pe_headers or {}).get("time_date_stamp")
             if time_stamp_val:
                 pe_prov = normalize_pe_timestamp(time_stamp_val, art.created_at)
                 events.append(
@@ -1105,21 +1105,21 @@ def generate_incident_timeline(incident: Incident) -> list[TimelineEvent]:
                     source="pe_static_analysis",
                     description=(
                         f"Static PE analysis completed for '{art.filename}': "
-                        f"status={analysis.status}, sections={len(analysis.sections)}, "
-                        f"imports={len(analysis.imports)}"
+                        f"status={analysis.status}, sections={len(analysis.sections or [])}, "
+                        f"imports={len(analysis.imports or [])}"
                     ),
                     artifact_id=art.id,
                     event_data={
                         "status": analysis.status,
                         "is_pe": analysis.is_pe,
-                        "sections_count": len(analysis.sections),
+                        "sections_count": len(analysis.sections or []),
                         "timestamp_source": "analysis_completion_time",
                         "is_uncertain": False,
                     },
                 )
             )
 
-            for match in analysis.yara_matches:
+            for match in analysis.yara_matches or []:
                 rule_name = str(match.get("rule", "UnknownRule"))
                 events.append(
                     TimelineEvent(

@@ -2,7 +2,6 @@ import hashlib
 import logging
 import math
 import re
-from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -63,7 +62,11 @@ class PEAnalysisData:
 def _section_entropy(raw_data: bytes) -> float:
     if not raw_data:
         return 0.0
-    frequencies = Counter(raw_data)
+    # Let bytes.count scan in C so large sections do not allocate one Python
+    # counter update per byte (especially costly while resource use is traced).
+    frequencies = {
+        value: raw_data.count(bytes((value,))) for value in set(raw_data)
+    }
     entropy = 0.0
     length = len(raw_data)
     for count in frequencies.values():
