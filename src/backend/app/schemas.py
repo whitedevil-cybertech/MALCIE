@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class IncidentCreate(BaseModel):
@@ -185,8 +186,8 @@ class ArtifactAnalysisRead(BaseModel):
     error_message: str | None
     is_pe: bool
     file_type: str | None
-    pe_headers: dict[str, str | int | None]
-    sections: list[dict[str, str | int | float]]
+    pe_headers: dict[str, Any]
+    sections: list[dict[str, Any]]
     imports: list[dict[str, object]]
     extracted_strings: list[str]
     md5: str | None = None
@@ -236,6 +237,7 @@ class LinkageItem(BaseModel):
     target_id: str | int
     relation: str
     description: str
+    evidence_ref: str | None = None
     metadata: dict[str, object] = {}
 
 
@@ -243,12 +245,18 @@ class ConfidenceAssessment(BaseModel):
     score: float
     level: str
     reasons: list[str] = []
+    missing_evidence: list[str] = []
+    failed_evidence: list[str] = []
+    stale_evidence: list[str] = []
+    conflicting_evidence: list[str] = []
+    score_breakdown: list[dict[str, Any]] = []
 
 
 class RiskAssessment(BaseModel):
     score: int
     level: str
     reasons: list[str] = []
+    score_breakdown: list[dict[str, Any]] = []
 
 
 class CorrelationResponse(BaseModel):
@@ -258,6 +266,10 @@ class CorrelationResponse(BaseModel):
     confidence: ConfidenceAssessment
     risk: RiskAssessment
     linkages: list[LinkageItem] = []
+    algorithm_version: str = "2.1.0"
+    scoring_version: str = "2.1.0"
+    missing_evidence: list[str] = []
+    score_breakdown: dict[str, Any] = {}
     created_at: datetime
 
 
@@ -312,3 +324,42 @@ class TelemetryUploadResponse(BaseModel):
     duplicate_count: int
     unassociated_count: int
     events: list[EndpointEventRead]
+
+
+class ReportCreateRequest(BaseModel):
+    title: str = Field(default="Incident Investigation Report", min_length=1, max_length=255)
+    summary: str | None = Field(default=None, max_length=10_000)
+    disposition: str = Field(default="under_investigation", min_length=1, max_length=64)
+
+
+class ReportRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    report_id: str
+    incident_id: int
+    version: int
+    author_id: int | None
+    author_email: str
+    title: str
+    summary: str | None
+    disposition: str
+    correlation_version: str
+    scoring_version: str
+    evidence_hash: str
+    created_at: datetime
+
+
+class ReportDetailRead(ReportRead):
+    evidence_snapshot: dict[str, Any]
+    report_data: dict[str, Any]
+
+
+class ReportCompareResponse(BaseModel):
+    report_a_id: str
+    report_b_id: str
+    version_a: int
+    version_b: int
+    score_diff: dict[str, Any]
+    evidence_diff: dict[str, Any]
+    disposition_diff: dict[str, Any]

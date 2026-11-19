@@ -151,11 +151,30 @@ def test_yara_custom_rule_compilation() -> None:
 
 
 def test_yara_successful_match() -> None:
+    # Test production rule matching
+    prod_data = b"powershell.exe -nop -enc JABzACAAPQ... -WindowStyle Hidden"
+    prod_matches = scan_content_with_yara(prod_data)
+    assert len(prod_matches) >= 1
+    matched_rules = [item["rule"] for item in prod_matches]
+    assert "Suspicious_PowerShell_EncodedCommand" in matched_rules
+
+    ps_finding = next(
+        item for item in prod_matches if item["rule"] == "Suspicious_PowerShell_EncodedCommand"
+    )
+    assert ps_finding["meta"].get("category") == "execution"
+    assert ps_finding["meta"].get("severity") == "medium"
+    assert "execution" in ps_finding["tags"]
+    assert ps_finding["strings"]
+
+    # Test dedicated test rule file when compiled from tests/rules/yara
+    test_rules_dir = Path(__file__).resolve().parents[1] / "rules" / "yara"
+    test_rules = compile_yara_rules(test_rules_dir)
+    assert test_rules is not None
     data = b"Some payload with MALCIE_TEST_INDICATOR_SAMPLE embedded inside"
-    matches = scan_content_with_yara(data)
+    matches = scan_content_with_yara(data, rules=test_rules)
     assert len(matches) >= 1
-    matched_rules = [item["rule"] for item in matches]
-    assert "Test_Indicator_Rule" in matched_rules
+    test_matched = [item["rule"] for item in matches]
+    assert "Test_Indicator_Rule" in test_matched
 
     test_finding = next(item for item in matches if item["rule"] == "Test_Indicator_Rule")
     assert test_finding["meta"].get("category") == "test"
@@ -272,8 +291,8 @@ def test_artifact_analysis_end_to_end_pipeline(client: TestClient) -> None:
     incident_id = _create_incident(client)
 
     payload_text = (
-        b"MALCIE_TEST_INDICATOR_SAMPLE\x00"
-        b"https://evil-c2.example.com/gate.php\x00"
+        b"powershell.exe -nop -enc JABzACAAPQ... -WindowStyle Hidden\x00"
+        b"URLDownloadToFile https://evil-c2.example.com/gate.php\x00"
         b"203.0.113.88\x00"
         b"C:\\ProgramData\\updater.exe\x00"
     )
@@ -296,7 +315,8 @@ def test_artifact_analysis_end_to_end_pipeline(client: TestClient) -> None:
     # 2. Verify YARA findings
     assert isinstance(body["yara_matches"], list)
     yara_rules = [match["rule"] for match in body["yara_matches"]]
-    assert "Test_Indicator_Rule" in yara_rules
+    assert "Suspicious_PowerShell_EncodedCommand" in yara_rules
+    assert "Suspicious_Downloader_Artifact" in yara_rules
 
     # 3. Verify IOC records in response
     assert isinstance(body["iocs"], list)

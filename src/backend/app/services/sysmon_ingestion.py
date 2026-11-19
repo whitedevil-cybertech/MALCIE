@@ -5,10 +5,11 @@ import json
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -160,8 +161,13 @@ def normalize_event(raw: dict[str, Any], source_name: str = "sysmon") -> Normali
     event_id = int(_get(system, "EventID", "event_id") or _get(raw, "EventID", "event_id") or 0)
     if event_id not in SUPPORTED_EVENT_IDS:
         raise ValueError(f"Unsupported Sysmon Event ID: {event_id}")
-    timestamp = _utc(
-        _get(system, "UtcTime", "TimeCreated", "timestamp") or _get(raw, "UtcTime", "timestamp")
+    source_timestamp = (
+        _get(system, "UtcTime", "TimeCreated", "timestamp")
+        or _get(raw, "UtcTime", "timestamp")
+    )
+    timestamp = _utc(source_timestamp)
+    future_timestamp = timestamp > (
+        datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=1)
     )
     hashes: dict[str, str] = {}
     raw_hashes = _get(data, "Hashes", "hashes")
@@ -215,7 +221,19 @@ def normalize_event(raw: dict[str, Any], source_name: str = "sysmon") -> Normali
     return NormalizedSysmonEvent(
         **normalized,
         raw_evidence=raw_evidence,
-        provenance={"source": source_name, "event_id": event_id, "hostname": hostname},
+        provenance={
+            "source": source_name,
+            "event_id": event_id,
+            "hostname": hostname,
+            "source_timestamp": str(source_timestamp),
+            "normalized_timestamp": timestamp.isoformat(),
+            "timestamp_normalization": "sysmon_iso8601_to_utc",
+            "timestamp_uncertain": future_timestamp,
+            "clock_skew_flag": (
+                "Sysmon event timestamp is more than one hour in the future"
+                if future_timestamp else None
+            ),
+        },
         fingerprint=fingerprint,
     )
 
@@ -247,14 +265,32 @@ def _candidate_incident_ids(db: Session, event: NormalizedSysmonEvent) -> set[in
 def persist_events(
     db: Session, events: list[NormalizedSysmonEvent], incident_id: int | None = None
 ) -> tuple[list[EndpointEvent], int]:
-    stored: list[EndpointEvent] = []
-    duplicates = 0
+    # Batch lookup and insert keeps large, bounded uploads from issuing one SELECT,
+    # savepoint, COMMIT, and refresh query per event.
+    event_by_fingerprint: dict[str, NormalizedSysmonEvent] = {}
+    duplicate_count = 0
     for event in events:
-        existing = db.execute(
-            select(EndpointEvent).where(EndpointEvent.fingerprint == event.fingerprint)
-        ).scalar_one_or_none()
-        if existing:
-            duplicates += 1
+        if event.fingerprint in event_by_fingerprint:
+            duplicate_count += 1
+        else:
+            event_by_fingerprint[event.fingerprint] = event
+
+    fingerprints = list(event_by_fingerprint)
+    existing_by_fingerprint: dict[str, EndpointEvent] = {}
+    for offset in range(0, len(fingerprints), 900):
+        rows = db.scalars(
+            select(EndpointEvent).where(
+                EndpointEvent.fingerprint.in_(fingerprints[offset:offset + 900])
+            )
+        )
+        existing_by_fingerprint.update({row.fingerprint: row for row in rows})
+
+    stored: list[EndpointEvent] = []
+    pending: list[EndpointEvent] = []
+    for fingerprint, event in event_by_fingerprint.items():
+        existing = existing_by_fingerprint.get(fingerprint)
+        if existing is not None:
+            duplicate_count += 1
             stored.append(existing)
             continue
         selected_incident = incident_id
@@ -287,25 +323,41 @@ def persist_events(
             provenance=event.provenance,
             fingerprint=event.fingerprint,
         )
-        try:
-            with db.begin_nested():
-                db.add(record)
-                db.flush()
-            stored.append(record)
-        except Exception as exc:
-            from sqlalchemy.exc import IntegrityError
-
-            if not isinstance(exc, IntegrityError):
-                raise
-            duplicate = db.execute(
-                select(EndpointEvent).where(EndpointEvent.fingerprint == event.fingerprint)
-            ).scalar_one()
-            duplicates += 1
-            stored.append(duplicate)
-    db.commit()
-    for record in stored:
-        db.refresh(record)
-    return stored, duplicates
+        pending.append(record)
+    try:
+        db.add_all(pending)
+        db.flush()
+        db.commit()
+    except IntegrityError:
+        # A concurrent uploader may have inserted a matching fingerprint after our
+        # initial lookup. Recover those records and commit the remaining batch once.
+        db.rollback()
+        raced_duplicates: dict[str, EndpointEvent] = {}
+        pending_fingerprints = [record.fingerprint for record in pending]
+        for offset in range(0, len(pending_fingerprints), 900):
+            rows = db.scalars(
+                select(EndpointEvent).where(
+                    EndpointEvent.fingerprint.in_(
+                        pending_fingerprints[offset:offset + 900]
+                    )
+                )
+            )
+            raced_duplicates.update({row.fingerprint: row for row in rows})
+        if not raced_duplicates:
+            raise
+        duplicate_count += len(raced_duplicates)
+        stored.extend(raced_duplicates.values())
+        pending = [
+            record for record in pending
+            if record.fingerprint not in raced_duplicates
+        ]
+        db.add_all(pending)
+        db.flush()
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return stored + pending, duplicate_count
 
 
 def ingest_payload(

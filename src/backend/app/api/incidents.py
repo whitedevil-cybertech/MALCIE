@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.security import AuthenticatedUser, get_current_user, require_role
 from app.db import get_db
-from app.models import EndpointEvent, Incident
+from app.models import EndpointEvent, Incident, InvestigationReport
 from app.schemas import (
     ConfidenceAssessment,
     CorrelationResponse,
@@ -18,6 +18,9 @@ from app.schemas import (
     IncidentRead,
     IOCRecordRead,
     LinkageItem,
+    ReportCreateRequest,
+    ReportDetailRead,
+    ReportRead,
     RiskAssessment,
     TimelineEventRead,
 )
@@ -25,6 +28,7 @@ from app.services.correlation_engine import (
     get_incident_timeline_events,
     run_incident_correlation,
 )
+from app.services.investigation_reports import create_investigation_report, render_report_pdf
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 DB_SESSION = Depends(get_db)
@@ -139,13 +143,23 @@ def get_incident_correlations(
             score=corr.confidence_score,
             level=corr.confidence_level,
             reasons=corr.confidence_reasons,
+            missing_evidence=corr.missing_evidence,
+            failed_evidence=corr.score_breakdown.get("failed_evidence", []),
+            stale_evidence=corr.score_breakdown.get("stale_evidence", []),
+            conflicting_evidence=corr.score_breakdown.get("conflicting_evidence", []),
+            score_breakdown=corr.score_breakdown.get("confidence", []),
         ),
         risk=RiskAssessment(
             score=corr.risk_score,
             level=corr.risk_level,
             reasons=corr.risk_reasons,
+            score_breakdown=corr.score_breakdown.get("risk", []),
         ),
         linkages=linkage_items,
+        algorithm_version=corr.algorithm_version,
+        scoring_version=corr.scoring_version,
+        missing_evidence=corr.missing_evidence,
+        score_breakdown=corr.score_breakdown,
         created_at=corr.created_at,
     )
 
@@ -187,4 +201,65 @@ def get_incident_endpoint_telemetry(
         .filter(EndpointEvent.incident_id == incident_id)
         .order_by(EndpointEvent.timestamp.asc(), EndpointEvent.fingerprint.asc())
         .all()
+    )
+
+
+@router.post("/{incident_id}/reports", response_model=ReportDetailRead, status_code=201)
+def create_report(
+    incident_id: int,
+    payload: ReportCreateRequest,
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(require_role("analyst")),
+) -> InvestigationReport:
+    incident = _get_incident_or_404(db, incident_id, user)
+    return create_investigation_report(
+        db, incident, author_id=user.id if user else None,
+        author_email=user.email if user else "development-anonymous",
+        title=payload.title, summary=payload.summary, disposition=payload.disposition,
+    )
+
+
+@router.get("/{incident_id}/reports", response_model=list[ReportRead])
+def list_reports(
+    incident_id: int,
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
+) -> list[InvestigationReport]:
+    _get_incident_or_404(db, incident_id, user)
+    return list(db.scalars(
+        select(InvestigationReport).where(InvestigationReport.incident_id == incident_id)
+        .order_by(InvestigationReport.version.desc())
+    ))
+
+
+@router.get("/{incident_id}/reports/{report_id}", response_model=ReportDetailRead)
+def get_report(
+    incident_id: int,
+    report_id: str,
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
+) -> InvestigationReport:
+    _get_incident_or_404(db, incident_id, user)
+    report = db.scalar(select(InvestigationReport).where(
+        InvestigationReport.report_id == report_id,
+        InvestigationReport.incident_id == incident_id,
+    ))
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return report
+
+
+@router.get("/{incident_id}/reports/{report_id}/pdf")
+def get_report_pdf(
+    incident_id: int,
+    report_id: str,
+    db: Session = DB_SESSION,
+    user: AuthenticatedUser | None = Depends(get_current_user),
+) -> Response:
+    report = get_report(incident_id, report_id, db, user)
+    return Response(
+        content=render_report_pdf(report), media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="malcie-report-v{report.version}.pdf"'
+        },
     )

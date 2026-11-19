@@ -73,6 +73,11 @@ class Incident(Base):
     endpoint_events: Mapped[list[EndpointEvent]] = relationship(
         back_populates="incident", cascade="all, delete-orphan", order_by="EndpointEvent.timestamp"
     )
+    reports: Mapped[list[InvestigationReport]] = relationship(
+        back_populates="incident",
+        cascade="all, delete-orphan",
+        order_by="InvestigationReport.version",
+    )
 
 
 class EmailEvidence(Base):
@@ -279,6 +284,10 @@ class CorrelationResult(Base):
     risk_level: Mapped[str] = mapped_column(String(32), nullable=False, default="LOW")
     risk_reasons: Mapped[list[str]] = mapped_column(JSON, default=list)
     linkages: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
+    algorithm_version: Mapped[str] = mapped_column(String(32), nullable=False, default="2.1.0")
+    scoring_version: Mapped[str] = mapped_column(String(32), nullable=False, default="2.1.0")
+    missing_evidence: Mapped[list[str]] = mapped_column(JSON, default=list)
+    score_breakdown: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
@@ -346,3 +355,37 @@ class EndpointEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     incident: Mapped[Incident | None] = relationship(back_populates="endpoint_events")
+
+
+class InvestigationReport(Base):
+    __tablename__ = "investigation_reports"
+    __table_args__ = (
+        UniqueConstraint(
+            "incident_id", "version", name="uq_investigation_reports_incident_version"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    report_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    incident_id: Mapped[int] = mapped_column(
+        ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    author_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    author_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    disposition: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="under_investigation"
+    )
+    correlation_version: Mapped[str] = mapped_column(String(32), nullable=False, default="2.1.0")
+    scoring_version: Mapped[str] = mapped_column(String(32), nullable=False, default="2.1.0")
+    evidence_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence_snapshot: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    report_data: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    incident: Mapped[Incident] = relationship(back_populates="reports")
+    author: Mapped[User | None] = relationship()

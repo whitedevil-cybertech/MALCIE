@@ -4,6 +4,8 @@ import json
 
 from fastapi.testclient import TestClient
 
+from app.services.sysmon_ingestion import normalize_event
+
 
 def _incident(client: TestClient) -> int:
     response = client.post("/api/v1/incidents", json={"title": "Sysmon test"})
@@ -25,6 +27,16 @@ def _event(event_id: int = 1) -> dict[str, object]:
             "Hashes": "SHA256=" + "a" * 64,
         },
     }
+
+
+def test_future_sysmon_timestamp_preserves_source_and_marks_clock_skew() -> None:
+    event = _event()
+    event["UtcTime"] = "2038-09-15T14:30:00Z"
+    normalized = normalize_event(event)
+    assert normalized.provenance["source_timestamp"] == "2038-09-15T14:30:00Z"
+    assert normalized.provenance["timestamp_normalization"] == "sysmon_iso8601_to_utc"
+    assert normalized.provenance["timestamp_uncertain"] is True
+    assert normalized.provenance["clock_skew_flag"]
 
 
 def test_json_sysmon_ingestion_is_normalized_and_idempotent(client: TestClient) -> None:

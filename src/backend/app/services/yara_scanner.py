@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,15 @@ logger = logging.getLogger(__name__)
 
 MAX_STRING_MATCH_INSTANCES = 10
 MAX_STRING_PREVIEW_LEN = 128
+
+_RULES_CACHE_LOCK = threading.Lock()
+_COMPILED_RULES_CACHE: dict[str, tuple[tuple[tuple[str, int, int], ...], yara.Rules]] = {}
+
+
+def clear_yara_cache() -> None:
+    with _RULES_CACHE_LOCK:
+        _COMPILED_RULES_CACHE.clear()
+        logger.info("YARA rules cache cleared")
 
 
 @dataclass
@@ -61,24 +71,54 @@ def resolve_yara_rules_path(configured_path: str | None = None) -> Path:
     return fallback
 
 
-def compile_yara_rules(rules_dir: Path | str | None = None) -> yara.Rules | None:
+def compile_yara_rules(
+    rules_dir: Path | str | None = None,
+    use_cache: bool = True,
+) -> yara.Rules | None:
     directory = Path(rules_dir) if rules_dir else resolve_yara_rules_path()
     if not directory.exists() or not directory.is_dir():
         logger.info("YARA rules directory does not exist: %s", directory)
         return None
 
-    rule_files: dict[str, str] = {}
+    resolved_dir_key = str(directory.resolve())
+
+    # Collect files and timestamps for cache invalidation
+    files_with_mtime: list[tuple[str, int, int]] = []
     for extension in ("*.yar", "*.yara"):
         for file_path in directory.rglob(extension):
-            rule_files[f"ns_{file_path.stem}_{len(rule_files)}"] = str(file_path.resolve())
+            try:
+                stat = file_path.stat()
+                mtime_ns = stat.st_mtime_ns
+                file_size = stat.st_size
+            except OSError:
+                mtime_ns = 0
+                file_size = -1
+            files_with_mtime.append((str(file_path.resolve()), mtime_ns, file_size))
 
-    if not rule_files:
+    if not files_with_mtime:
         logger.info("No YARA rule files found in: %s", directory)
         return None
+
+    files_with_mtime.sort(key=lambda x: x[0])
+    cache_fingerprint = tuple(files_with_mtime)
+
+    if use_cache:
+        with _RULES_CACHE_LOCK:
+            if resolved_dir_key in _COMPILED_RULES_CACHE:
+                cached_fp, cached_rules = _COMPILED_RULES_CACHE[resolved_dir_key]
+                if cached_fp == cache_fingerprint:
+                    return cached_rules
+
+    rule_files: dict[str, str] = {
+        f"ns_{Path(fp).stem}_{idx}": fp for idx, (fp, _, _) in enumerate(files_with_mtime)
+    }
 
     try:
         compiled = yara.compile(filepaths=rule_files)
         logger.info("Successfully compiled %d YARA rule file(s)", len(rule_files))
+        if use_cache:
+            with _RULES_CACHE_LOCK:
+                _COMPILED_RULES_CACHE[resolved_dir_key] = (cache_fingerprint, compiled)
         return compiled
     except yara.SyntaxError as exc:
         logger.warning("YARA syntax error while compiling rules: %s", exc)
@@ -137,6 +177,11 @@ def scan_content_with_yara(
 ) -> list[dict[str, Any]]:
     if not content:
         return []
+    if len(content) > settings.max_attachment_size_bytes:
+        raise ValueError(
+            "YARA input exceeds configured maximum allowed size "
+            f"({settings.max_attachment_size_bytes} bytes)"
+        )
 
     active_rules = rules if rules is not None else compile_yara_rules()
     if active_rules is None:

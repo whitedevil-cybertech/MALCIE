@@ -2,6 +2,7 @@ import hashlib
 import logging
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,27 @@ logger = logging.getLogger(__name__)
 PRINTABLE_STRING_PATTERN = re.compile(rb"[\x20-\x7e]{4,}")
 MAX_STRINGS = 200
 
+SUSPICIOUS_API_NAMES = {
+    "urldownloadtofilea",
+    "urldownloadtofilew",
+    "internetreadfile",
+    "winhttpopen",
+    "virtualalloc",
+    "virtualallocex",
+    "writeprocessmemory",
+    "createremotethread",
+    "winexec",
+    "shellexecutea",
+    "shellexecutew",
+    "ntqueueapcthread",
+    "zwunmapviewofsection",
+    "minidumpwritedump",
+    "setwindowshookexa",
+    "getasynckeystate",
+    "isdebuggerpresent",
+    "checkremotedebuggerpresent",
+}
+
 
 @dataclass
 class PEAnalysisData:
@@ -24,12 +46,15 @@ class PEAnalysisData:
     error_message: str | None
     is_pe: bool
     file_type: str | None
-    pe_headers: dict[str, str | int | None]
-    sections: list[dict[str, str | int | float]]
+    pe_headers: dict[str, Any]
+    sections: list[dict[str, Any]]
     imports: list[dict[str, object]]
     extracted_strings: list[str]
     md5: str | None = None
     sha1: str | None = None
+    imphash: str | None = None
+    file_entropy: float | None = None
+    suspicious_indicators: list[str] = field(default_factory=list)
     yara_matches: list[dict[str, Any]] = field(default_factory=list)
     iocs: list[dict[str, Any]] = field(default_factory=list)
 
@@ -38,12 +63,10 @@ class PEAnalysisData:
 def _section_entropy(raw_data: bytes) -> float:
     if not raw_data:
         return 0.0
-    frequencies = [0] * 256
-    for byte in raw_data:
-        frequencies[byte] += 1
+    frequencies = Counter(raw_data)
     entropy = 0.0
     length = len(raw_data)
-    for count in frequencies:
+    for count in frequencies.values():
         if count == 0:
             continue
         probability = count / length
@@ -52,17 +75,14 @@ def _section_entropy(raw_data: bytes) -> float:
 
 
 def _extract_strings(content: bytes) -> list[str]:
-    decoded = [
-        match.decode("utf-8", errors="ignore")
-        for match in PRINTABLE_STRING_PATTERN.findall(content)
-    ]
     unique: list[str] = []
     seen: set[str] = set()
-    for item in decoded:
-        if item in seen:
+    for match in PRINTABLE_STRING_PATTERN.finditer(content):
+        text = match.group(0).decode("utf-8", errors="ignore")
+        if text in seen:
             continue
-        seen.add(item)
-        unique.append(item)
+        seen.add(text)
+        unique.append(text)
         if len(unique) >= MAX_STRINGS:
             break
     return unique
@@ -98,6 +118,81 @@ def _parse_pe(content: bytes) -> PEAnalysisData:
     try:
         pe = pefile.PE(data=content, fast_load=False)
         machine_type = pefile.MACHINE_TYPE.get(pe.FILE_HEADER.Machine)
+
+        imphash: str | None = None
+        try:
+            imphash = pe.get_imphash()
+            if not imphash:
+                imphash = None
+        except Exception:
+            imphash = None
+
+        file_entropy = _section_entropy(content)
+        suspicious_indicators: list[str] = []
+
+        if file_entropy > 7.2:
+            suspicious_indicators.append(
+                f"High overall binary Shannon entropy ({file_entropy:.2f}), "
+                "suggesting packing or encryption"
+            )
+
+        sections: list[dict[str, Any]] = []
+        for section in pe.sections:
+            name = section.Name.decode("utf-8", errors="ignore").replace("\x00", "")
+            raw_bytes = section.get_data()
+            entropy = _section_entropy(raw_bytes)
+            characteristics = getattr(section, "Characteristics", 0)
+            is_writable = bool(characteristics & 0x80000000)
+            is_executable = bool(characteristics & 0x20000000)
+            is_readable = bool(characteristics & 0x40000000)
+
+            if is_writable and is_executable:
+                suspicious_indicators.append(
+                    f"Section '{name}' has both Writable and Executable permissions (W^X violation)"
+                )
+            if entropy > 7.0:
+                suspicious_indicators.append(
+                    f"Section '{name}' has high Shannon entropy ({entropy:.2f}), "
+                    "indicating packing or obfuscation"
+                )
+            if any(p in name.upper() for p in ("UPX", "ASPACK", "FSG", "THEMIDA", "VMP")):
+                suspicious_indicators.append(
+                    f"Section name '{name}' matches known packer signature"
+                )
+
+            sections.append(
+                {
+                    "name": name,
+                    "virtual_address": section.VirtualAddress,
+                    "virtual_size": section.Misc_VirtualSize,
+                    "raw_size": section.SizeOfRawData,
+                    "entropy": entropy,
+                    "characteristics": hex(characteristics),
+                    "is_writable": is_writable,
+                    "is_executable": is_executable,
+                    "is_readable": is_readable,
+                }
+            )
+
+        imports: list[dict[str, object]] = []
+        if hasattr(pe, "DIRECTORY_ENTRY_IMPORT"):
+            for entry in pe.DIRECTORY_ENTRY_IMPORT:
+                dll_name = entry.dll.decode("utf-8", errors="ignore") if entry.dll else "unknown"
+                functions: list[str] = []
+                for imported in entry.imports:
+                    if imported.name:
+                        fn_name = imported.name.decode("utf-8", errors="ignore")
+                        functions.append(fn_name)
+                        if fn_name.lower() in SUSPICIOUS_API_NAMES:
+                            suspicious_indicators.append(
+                                f"Suspicious API import '{fn_name}' from '{dll_name}'"
+                            )
+                    elif imported.ordinal is not None:
+                        functions.append(f"ordinal:{imported.ordinal}")
+                imports.append({"dll": dll_name, "functions": functions})
+
+        file_type = "pe32+" if pe.PE_TYPE == pefile.OPTIONAL_HEADER_MAGIC_PE_PLUS else "pe32"
+
         pe_headers = {
             "machine": machine_type,
             "machine_hex": hex(pe.FILE_HEADER.Machine),
@@ -109,35 +204,10 @@ def _parse_pe(content: bytes) -> PEAnalysisData:
             "subsystem": pe.OPTIONAL_HEADER.Subsystem,
             "dll_characteristics": hex(pe.OPTIONAL_HEADER.DllCharacteristics),
             "size_of_image": pe.OPTIONAL_HEADER.SizeOfImage,
+            "imphash": imphash,
+            "file_entropy": file_entropy,
+            "suspicious_indicators": suspicious_indicators,
         }
-
-        sections: list[dict[str, str | int | float]] = []
-        for section in pe.sections:
-            name = section.Name.decode("utf-8", errors="ignore").replace("\x00", "")
-            raw_bytes = section.get_data()
-            sections.append(
-                {
-                    "name": name,
-                    "virtual_address": section.VirtualAddress,
-                    "virtual_size": section.Misc_VirtualSize,
-                    "raw_size": section.SizeOfRawData,
-                    "entropy": _section_entropy(raw_bytes),
-                }
-            )
-
-        imports: list[dict[str, object]] = []
-        if hasattr(pe, "DIRECTORY_ENTRY_IMPORT"):
-            for entry in pe.DIRECTORY_ENTRY_IMPORT:
-                dll_name = entry.dll.decode("utf-8", errors="ignore") if entry.dll else "unknown"
-                functions: list[str] = []
-                for imported in entry.imports:
-                    if imported.name:
-                        functions.append(imported.name.decode("utf-8", errors="ignore"))
-                    elif imported.ordinal is not None:
-                        functions.append(f"ordinal:{imported.ordinal}")
-                imports.append({"dll": dll_name, "functions": functions})
-
-        file_type = "pe32+" if pe.PE_TYPE == pefile.OPTIONAL_HEADER_MAGIC_PE_PLUS else "pe32"
 
         return PEAnalysisData(
             status="completed",
@@ -148,6 +218,9 @@ def _parse_pe(content: bytes) -> PEAnalysisData:
             sections=sections,
             imports=imports,
             extracted_strings=strings,
+            imphash=imphash,
+            file_entropy=file_entropy,
+            suspicious_indicators=suspicious_indicators,
         )
     except pefile.PEFormatError as exc:
         logger.warning("PE format error during static analysis: %s", exc)
@@ -180,6 +253,17 @@ def _read_artifact_bytes(storage_path: str) -> bytes:
     artifact_path = Path(storage_path).resolve()
     if root != artifact_path and root not in artifact_path.parents:
         raise ValueError("Artifact path is outside evidence storage")
+    if not artifact_path.exists():
+        raise FileNotFoundError(f"Artifact file does not exist: {storage_path}")
+
+    file_size = artifact_path.stat().st_size
+    from app.core.config import settings
+
+    if file_size > settings.max_attachment_size_bytes:
+        raise ValueError(
+            f"Artifact size ({file_size} bytes) exceeds configured maximum allowed size "
+            f"({settings.max_attachment_size_bytes} bytes)"
+        )
     return artifact_path.read_bytes()
 
 

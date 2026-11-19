@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import (
     AuthenticatedUser,
     ensure_incident_access,
@@ -29,9 +30,16 @@ async def upload_telemetry(
         if incident is None:
             raise HTTPException(status_code=404, detail="Incident not found")
         ensure_incident_access(incident, user)
+    payload = bytearray()
+    async for chunk in request.stream():
+        payload.extend(chunk)
+        if len(payload) > settings.max_telemetry_size_bytes:
+            raise HTTPException(
+                status_code=413, detail="Telemetry payload exceeds configured size limit"
+            )
     try:
         records, duplicates = ingest_payload(
-            db, await request.body(), request.headers.get("content-type"), incident_id
+            db, bytes(payload), request.headers.get("content-type"), incident_id
         )
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
